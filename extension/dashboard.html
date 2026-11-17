@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>采集与导出</title>
+  <link rel="stylesheet" href="dashboard.css">
+  <script src="dashboard.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="page-header">
+      <div><p class="eyebrow">求职记录</p><h1>采集与导出</h1><p class="subtitle">更新聊天记录，查看采集进度或导出本地数据。</p></div>
+      <div class="actions"><button id="refresh" type="button">刷新</button><button id="export" type="button">导出 JSON</button><button id="sync" class="primary" type="button">更新采集</button><button id="stop-sync" type="button" disabled>停止同步</button></div>
+    </header>
+    <p id="feedback" class="feedback" role="status" aria-live="polite" aria-atomic="true">正在读取本地记录…</p>
+    <section class="stat" aria-label="本地记录概览"><span>已记录对话</span><strong id="conversation-count">—</strong></section>
+    <section class="coverage panel" aria-labelledby="coverage-title" aria-busy="true" id="sync-panel">
+      <div class="section-heading"><h2 id="coverage-title">采集进度</h2><span id="sync-state" class="badge">等待本地数据</span></div>
+      <div class="account-picker"><label for="account-select">查看账号</label><select id="account-select" disabled><option value="">正在读取账号…</option></select></div>
+      <p id="account">当前账号：等待本地数据</p>
+      <p id="sync-progress">尚无同步进度</p>
+      <p id="sync-message"></p>
+      <p>采集范围取决于聊天页当前已加载的会话，不能保证覆盖全部记录。</p>
+      <details id="sync-details"><summary>查看同步信息</summary><dl id="sync-metadata" class="metadata"></dl></details>
+    </section>
+    <footer>记录保存在扩展本地。导出文件可能包含隐私信息，请妥善保管。</footer>
+  </main>
+</body>
+</html>

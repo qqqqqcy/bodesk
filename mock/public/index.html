@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mock BOSS · 沟通实验室</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/web/geek/chat">BOSS<span>MOCK / 沟通实验室</span></a>
+    <a href="/web/geek/jobs">职位列表</a>
+    <a href="/web/geek/recommend?tab=4&sub=1&tag=4">收藏职位</a>
+    <span class="local-badge">● 本地模拟环境</span>
+  </header>
+  <section class="lab" aria-label="开发场景控制">
+    <label>测试场景<select id="scenario" data-testid="scenario" aria-label="测试场景"></select></label>
+    <label>模拟账号<select id="account" data-testid="account" aria-label="模拟账号"></select></label>
+    <button id="reset" type="button">重置当前场景</button>
+    <details class="help"><summary>如何联调</summary><p>在扩展管理页加载项目根目录下的 extension，然后刷新页面。同一份扩展按页面地址区分真实站点与本地 mock。右下角浮窗提供职位状态、备注和删除；采集页面提供更新与导出。</p><p>切换场景会重置网页数据并刷新页面；不同场景使用独立的会话与 JD ID，插件会新增一套记录，旧场景记录继续保留。全部姓名、公司与消息均为虚构。</p></details>
+  </section>
+  <p id="notice" class="notice" role="status" hidden></p>
+  <main id="chat-layout" class="workspace">
+    <section class="contacts" aria-label="联系人列表">
+      <div class="list-heading"><h1>沟通</h1><span id="contact-count" class="muted"></span></div>
+      <label class="search-label"><span class="sr-only">搜索联系人或公司</span><input id="search" placeholder="搜索联系人、公司或职位" type="search"></label>
+      <div class="list-caption">全部联系人 <span>模拟数据</span></div>
+      <div id="contact-list" data-testid="contact-list"></div>
+      <button id="load-contacts" class="load-more" hidden>加载剩余联系人</button>
+      <p id="list-end" class="list-end"></p>
+    </section>
+    <section class="conversation" aria-label="聊天记录">
+      <div id="chat-empty" class="empty"><div class="empty-mark">聊</div><h2>从一次沟通开始</h2><p>选择左侧联系人，查看消息和关联职位。</p><small>用可重复的场景，验证每一步变化。</small></div>
+      <div id="chat-active" hidden>
+        <header class="conversation-heading"><div><h2 id="contact-name"></h2><p id="contact-company"></p></div><span class="tag">模拟联系人</span></header>
+        <a id="current-job" class="job-strip" href="#"></a>
+        <div class="chat-record"><button id="older" class="load-more" hidden>加载更早消息</button><div id="messages" data-testid="messages" aria-live="polite"></div></div>
+        <div class="composer">
+          <div class="actions" aria-label="模拟沟通操作">
+            <button data-action="apply_resume">申请发简历</button><button data-action="resume">发送简历</button><button data-action="read">对方已读</button><button data-action="request_resume">对方索要简历</button><button data-action="view_resume">对方查看简历</button><button data-action="withdraw">对方撤回消息</button><button data-action="unknown_resume">简历审核中</button><button data-action="resume_failed">简历发送失败 / 被拒绝</button><button data-action="switch_job">切换同公司 JD</button>
+          </div>
+          <form id="send-form"><label class="sr-only" for="draft">消息内容</label><textarea id="draft" placeholder="输入一条模拟消息…" maxlength="2000" rows="2"></textarea><div class="send-footer"><small>仅修改本地模拟数据</small><button class="primary" type="submit">发送消息</button></div></form>
+        </div>
+      </div>
+    </section>
+    <aside class="context-panel"><p class="eyebrow">WORKBENCH</p><h2>验证沟通的每一步</h2><p class="muted">页面结构、接口与插件读取约定保持兼容。</p><div class="context-card"><span>01 / 页面观察</span><p>切换会话、未读标记、实时消息。</p></div><div class="context-card"><span>02 / 历史采集</span><p>分页、去重、停止和异常中断。</p></div><div class="context-card"><span>03 / 公司与 JD</span><p>同公司多职位、同职位多联系人、缺少 JD。</p></div><p id="bridge-status" class="bridge-status">等待扩展连接</p></aside>
+  </main>
+  <main id="job-layout" class="job-page" hidden><a href="/web/geek/chat">← 返回沟通</a><section class="job-banner"><p class="eyebrow">模拟职位详情</p><h1></h1><p id="job-meta"></p><button id="job-detail-favorite" class="op-btn-like">收藏</button></section><section class="sider-company"><h2>公司信息</h2><div class="company-info"><a href="/web/geek/chat"></a></div></section><section class="job-description"><h2>职位描述</h2><p>与团队协作，设计清晰、稳定、易维护的产品体验。这是用于插件开发的虚构职位，支持公司与 JD 浮窗上下文验证。</p></section></main>
+  <main id="jobs-layout" class="jobs-page" hidden><section><h1>模拟职位列表</h1><p class="muted">选择职位，验证浮窗只读识别与已有 JD 高亮。</p><label>详情加载 <select id="job-detail-mode"><option value="normal">立即显示</option><option value="delayed">延迟 1.5 秒，保留上一条详情</option></select></label><div id="job-results"></div></section><div class="job-detail-container"><p id="job-detail-loading" role="status" hidden></p><section class="job-detail-box" hidden><h2 class="job-name"></h2><div class="job-company"><span class="brand-name"></span></div><button id="preview-favorite" class="op-btn-like">收藏</button><p class="job-preview-hint"></p><a class="job-detail-link">查看职位详情</a><h3>职位描述</h3><p>此处为虚构的当前 JD。浏览和切换不应增加插件中的公司、职位或沟通记录。</p></section></div></main>
+  <main id="favorites-layout" class="job-page" hidden><nav class="user-jobs-tab-nav"><span class="current" ka="personal_top_interest">感兴趣 <span id="favorites-count"></span></span><span class="current" ka="personal_sub_position_focus">职位收藏</span></nav><ul id="favorites-list" class="user-jobs-ul"></ul><aside class="sider-recommend"><a href="/job_detail/ignored-recommendation.html">侧栏推荐职位（不是收藏）</a></aside></main>
+  <details id="diagnostics" class="diagnostics"><summary>请求与插件事件 <span id="request-count">0</span></summary><p class="muted">仅显示本地模拟请求。同一份扩展在本地 mock 页面跳过采集间隔、周期休息和异常冷却。</p><div class="log-columns"><section><h3>接口请求</h3><pre id="request-log">暂无请求</pre></section><section><h3>插件事件</h3><pre id="bridge-log">等待页面观察事件…</pre></section></div></details>
+</body>
+</html>

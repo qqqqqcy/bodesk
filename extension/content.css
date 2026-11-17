@@ -1,0 +1,32 @@
+#boss-local-helper-widget{position:fixed;right:18px;bottom:18px;z-index:2147483646;box-sizing:border-box;width:360px;max-width:calc(100vw - 32px);max-height:calc(100vh - 36px);overflow:auto;padding:14px;border:1px solid #c8d4d5;border-radius:14px;background:#fff;color:#233a3c;box-shadow:0 5px 28px #133a3c22;font:13px/1.6 system-ui,sans-serif;text-align:left}
+#boss-local-helper-widget .bh-company-line{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px}
+#boss-local-helper-widget .bh-company{display:block;min-width:0;font-size:15px;line-height:1.5;overflow-wrap:anywhere}
+#boss-local-helper-widget .bh-jobs{max-height:min(420px,55vh);overflow-y:auto;overscroll-behavior:contain}
+#boss-local-helper-widget .bh-job{margin:4px 0;padding:9px 10px;border-left:3px solid transparent;border-radius:7px;background:#f5f7f7}
+#boss-local-helper-widget .bh-job-line{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+#boss-local-helper-widget .bh-job-title{min-width:0;flex:1;overflow-wrap:anywhere}
+#boss-local-helper-widget button{font:inherit;cursor:pointer}
+#boss-local-helper-widget button:disabled{opacity:.55;cursor:default}
+#boss-local-helper-widget .bh-job-status{flex:0 1 48%;margin:0;padding:0 0 2px;border:0;border-bottom:1px dashed #a5b9b8;border-radius:0;background:transparent;font-size:12px;color:#53686a;text-align:right;overflow-wrap:anywhere;line-height:1.6}
+#boss-local-helper-widget .bh-job-status:hover{color:#087f80}
+#boss-local-helper-widget .bh-current{border-left-color:#087f80;background:#e4f4f1;box-shadow:inset 0 0 0 1px #a7d8cd}
+#boss-local-helper-widget .bh-current .bh-job-title{font-weight:700;color:#075b59}
+#boss-local-helper-widget .bh-current .bh-job-status{color:#075b59;font-weight:600}
+#boss-local-helper-widget .bh-link-button{margin:0;padding:0;border:0;background:transparent;color:#087f80;font-size:12px;line-height:1.6;white-space:nowrap;text-decoration:underline;text-underline-offset:3px}
+#boss-local-helper-widget .bh-job-note-edit{display:block;margin-top:5px}
+#boss-local-helper-widget .bh-note-text{margin:6px 0 8px;max-height:6em;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:#53686a;font-size:12px}
+#boss-local-helper-widget .bh-note-history summary{font-size:12px;color:#53686a;cursor:pointer;margin-top:6px}
+#boss-local-helper-widget .bh-notice,#boss-local-helper-widget .bh-editor-feedback{margin:8px 0;color:#657a7c;font-size:12px;overflow-wrap:anywhere}
+#boss-local-helper-widget [hidden]{display:none!important}
+#boss-local-helper-widget .bh-editor{margin:9px 0 4px;padding:10px;border:1px solid #c8dcd8;border-radius:8px;background:#fff}
+#boss-local-helper-widget .bh-field{display:flex;flex-direction:column;gap:4px;margin-bottom:9px;color:#53686a;font-size:12px}
+#boss-local-helper-widget select,#boss-local-helper-widget textarea{display:block;box-sizing:border-box;width:100%;min-width:0;padding:7px;border:1px solid #c8d4d5;border-radius:6px;background:#fff;color:#233a3c;font:13px/1.5 system-ui,sans-serif}
+#boss-local-helper-widget textarea{resize:vertical;min-height:80px}
+#boss-local-helper-widget .bh-editor-actions{display:flex;gap:8px}
+#boss-local-helper-widget .bh-save,#boss-local-helper-widget .bh-overview{border:0;border-radius:7px;padding:7px 12px;background:#087f80;color:#fff;font:inherit}
+#boss-local-helper-widget .bh-overview{margin-top:10px}
+#boss-local-helper-widget .bh-cancel{border:1px solid #c8d4d5;border-radius:7px;padding:6px 11px;background:#fff;color:#53686a}
+#boss-local-helper-widget :focus-visible{outline:2px solid #087f80;outline-offset:2px}
+@media(max-width:650px){#boss-local-helper-widget{right:8px;bottom:8px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);padding:12px}#boss-local-helper-widget .bh-job-line{gap:8px}#boss-local-helper-widget .bh-job{padding:8px}}
+#boss-local-helper-widget a.bh-job-title{color:inherit;text-decoration:underline;text-underline-offset:3px}#boss-local-helper-widget a.bh-job-title:hover{color:#087f80}#boss-local-helper-widget .bh-favorite{display:inline-block;margin-top:5px;padding:1px 6px;border:1px solid #d6c38d;border-radius:4px;background:#fff8e6;color:#806216;font-size:11px}
+#boss-local-helper-widget .bh-controls,#boss-local-helper-widget .bh-job-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}#boss-local-helper-widget .bh-controls{margin-top:10px}#boss-local-helper-widget .bh-controls .bh-overview{margin-top:0}#boss-local-helper-widget .bh-job-actions{margin-top:5px}#boss-local-helper-widget .bh-job-actions .bh-job-note-edit{margin-top:0}#boss-local-helper-widget .bh-job-delete{color:#9c3935}

@@ -1,0 +1,21 @@
+{
+  "name": "boss-help",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node mock/server.js",
+    "dev": "node --watch mock/server.js",
+    "test": "node --test tests/extension/*.test.js tests/mock/*.test.js",
+    "test:extension": "node --test tests/extension/*.test.js",
+    "test:mock": "node --test tests/mock/*.test.js",
+    "test:browser": "node scripts/browser-smoke.js",
+    "check": "node scripts/check.js",
+    "research:export": "node research/chat-export/export-sample.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.8"
+  }
+}
