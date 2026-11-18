@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {createWorld, jobPageFixtures} from '../../mock/fixtures.js';
+import {createWorld, jobPageFixtures} from '../../mock/fixtures.ts';
 import {clientFor} from './support/client.js';
 
 test('职位页数据按真实jobInfo和brandComInfo层次生成，已有JD与聊天记录使用相同ID',()=>{

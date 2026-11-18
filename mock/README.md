@@ -1,16 +1,17 @@
 # Mock BOSS · 本地沟通实验室
 
-为项目根目录的 `extension/` 提供轻量、可重置的开发环境。使用原生 HTML / CSS / JavaScript 和 Node.js 自带 HTTP 服务，无 npm 依赖，无需登录真实 BOSS。姓名、账号、公司、职位与聊天记录均为虚构数据；消息操作只修改本地服务的内存数据。
+为项目根目录的 `extension/` 提供轻量、可重置的开发环境。页面使用 Vite + React + TypeScript，模拟服务使用 TypeScript 和 Node.js 自带 HTTP 服务，无需登录真实 BOSS。姓名、账号、公司、职位与聊天记录均为虚构数据；消息操作只修改本地服务的内存数据。
 
 ## 启动
 
-需要 Node.js 20 或更新版本。以下所有命令均在项目根目录执行：
+支持 Node.js 22.22.2+（22.x）、24.15+（24.x）或 26+。以下所有命令均在项目根目录执行：
 
 ```bash
-npm start
+npm ci
+npm run dev
 ```
 
-打开 <http://127.0.0.1:4173/web/geek/chat>。开发时可以使用 `npm run dev` 自动重启服务。服务仅监听 `127.0.0.1`，不请求或代理真实网站。重启服务会清空所有网页模拟会话。
+打开 <http://127.0.0.1:4173/web/geek/chat>。开发命令同时启动 Vite 热更新和扩展持续构建；模拟服务与夹具修改会自动重启。生产预览使用 npm start，先类型检查并构建，再提供 mock/dist 中的页面。服务仅监听 `127.0.0.1`，不请求或代理真实网站。重启服务会清空所有网页模拟会话。
 
 页面提供联系人搜索、聊天、加载更早消息、职位详情和模拟消息 / 简历操作。顶部可切换场景与账号；底部可展开请求日志与插件事件。320px 窄屏会改为上下布局。
 
@@ -22,7 +23,7 @@ npm start
 
 切换场景或账号会重建当前浏览器会话的网页数据并刷新页面。**插件已经保存的 IndexedDB 不会随场景重置而清空**。会话与 JD ID 包含账号和场景（例如 `alpha-normal-boss-1`、`alpha-ambiguous_resume-job-fullstack`），不同场景的数字消息 ID 也使用独立区间。切换场景会在插件中新增一套会话 / JD 记录，旧场景记录仍保留；在同一场景内重置与重新采集可验证去重和历史保留。公司名称仍用于插件的公司聚合，因此同名公司下可看到多个场景的独立 JD。两个模拟账号使用不同 ID，并在哈希前加入专用的 `boss:mock:` 命名空间；即使用户 ID 与真实账号相同，插件账号标识也不同。mock 与真实账号共用扩展数据库，但记录按账号隔离，采集页面中切换账号查看，不会混入真实账号的数据。
 
-本地 mock 使用 `http://127.0.0.1:4173` 或 `http://localhost:4173`。需要改端口时，同时修改 `extension/manifest.json`、`main.js` 的 `MOCK_ORIGIN`、`background.js` 的 `SITE_ORIGINS` 和 `dashboard.js` 的本地链接白名单；仍是同一份扩展，不另建包。
+本地 mock 使用 `http://127.0.0.1:4173` 或 `http://localhost:4173`。需要改端口时，同时修改 `extension/manifest.json`、`extension/src/main.ts` 的 `MOCK_ORIGIN`、`extension/src/background.ts` 的 `SITE_ORIGINS` 和 `extension/src/status.ts` 的本地链接白名单及 `scripts/dev.ts` 的监听端口；仍是同一份扩展，不另建包。
 
 ## 职位页只读识别
 
@@ -115,13 +116,13 @@ npm run check
 
 自动化测试覆盖固定夹具、消息操作、状态规则、真实 HTTP 分页、未读副作用、cookie 会话隔离、异常响应，以及单一扩展的双站点声明和 mock 账号命名空间。所有场景的会话 / JD / 数字消息 ID 均检查跨场景无重叠；HTTP 回归测试模拟插件按会话保存旧记录，验证 normal 切换到 ambiguous_resume / unknown_direction 后仍能分别得到缺失时间 / 方向缺失的待确认状态。集成测试在 VM 中执行**源扩展的 MAIN 脚本**，请求真实本地 HTTP 接口，验证多页采集、429 后保留已确认页并可立即重试、游标停滞、停止和账号切换。测试模拟持久化确认；不会代替浏览器 IndexedDB 或完整扩展安装的验证。扩展测试位于 `tests/extension/`，mock 与集成测试位于 `tests/mock/`，其中同步与后台测试同时覆盖真实地址和 mock 分支。
 
-已启动服务且安装 ego-browser 时，可以重跑浏览器冒烟测试：
+安装并运行 ego-browser 后，可以运行浏览器冒烟测试。命令自动构建，并在临时端口启动独立 mock，避免已安装扩展与注入测试浮窗重叠；完成后关闭临时服务和测试空间：
 
 ```bash
 npm run test:browser
 ```
 
-它验证发送、姓名和职位的文本转义、dialog 卡片、系统消息及切换 JD 的插件页面快照、简历、已读、搜索、加载联系人、空账号、切换账号、45 条分页、职位页及源扩展 MAIN 脚本的页面观察和 mock 账号标识，并检查 `window.__xss` 未被设置和 320px 宽度无水平溢出。它还通过页面切换 normal → ambiguous_resume / unknown_direction，验证会话 / JD / 消息 ID 不重叠，以及源插件 `inferStatus` 的待确认结果。方向场景还用源插件 `mergeJob` 聚合全部会话贡献，再运行源 content 脚本，逐一点击上述三位联系人，验证浮窗当前 JD 的三种结果。截图写入 `artifacts/desktop.png` 与 `artifacts/mobile.png`，完成后关闭测试空间。安全渲染检查运行未修改的源 MAIN 与 content 脚本，并使用本地替身提供 content 的后台响应；它不验证真实 IndexedDB 持久化。此命令不自动安装浏览器扩展；需要完整浮窗与采集页面联调时按前述步骤加载现有扩展。可用 `MOCK_ORIGIN` 指定测试地址。
+它验证发送、姓名和职位的文本转义、dialog 卡片、系统消息及切换 JD 的插件页面快照、简历、已读、搜索、加载联系人、空账号、切换账号、45 条分页、职位页及构建后的扩展 MAIN 脚本的页面观察和 mock 账号标识，并检查 `window.__xss` 未被设置和 320px 宽度无水平溢出。它还通过页面切换 normal → ambiguous_resume / unknown_direction，验证会话 / JD / 消息 ID 不重叠，以及源插件 `inferStatus` 的待确认结果。方向场景还用源插件 `mergeJob` 聚合全部会话贡献，再运行构建后的 content 脚本，逐一点击上述三位联系人，验证浮窗当前 JD 的三种结果。截图写入 `artifacts/desktop.png` 与 `artifacts/mobile.png`，完成后关闭测试空间。安全渲染检查运行未修改的构建后的 MAIN 与 content 脚本，并使用本地替身提供 content 的后台响应；它不验证真实 IndexedDB 持久化。此命令不自动安装浏览器扩展；需要完整浮窗与采集页面联调时按前述步骤加载现有扩展。可用 `MOCK_ORIGIN` 指定已有测试地址，该地址不应有其他扩展自动注入。mock 样式同时包含浮窗样式，供独立端口的浏览器测试使用。
 
 ## 开发接口与结构约定
 
@@ -135,6 +136,6 @@ npm run test:browser
 | `GET /wapi/zpchat/geek/getBossData?bossId=…` | 原插件兼容的 `{code, zpData:{data,job}}` |
 | `GET /wapi/zpchat/geek/historyMsg?bossId=…&maxMsgId=0&c=20&page=1` | `{code,zpData:{messages,hasMore,minMsgId}}`；后续页以 minMsgId 作为 maxMsgId |
 
-`mock/fixtures.js` 导出 `createWorld`、`listRows`、`historyPage`、`appendMessage`，可直接用于后续单测。数据通过浏览器 HttpOnly cookie 隔离，同一浏览器空间的标签共享模拟账号与场景，重置后其他已打开标签需刷新；不同客户端的 cookie 会话互不影响。
+`mock/fixtures.ts` 导出 `createWorld`、`listRows`、`historyPage`、`appendMessage`，可直接用于后续单测。数据通过浏览器 HttpOnly cookie 隔离，同一浏览器空间的标签共享模拟账号与场景，重置后其他已打开标签需刷新；不同客户端的 cookie 会话互不影响。
 
-页面保留原插件读取的 `window._PAGE.uid`、App `__vue__.$store.state.userInfo`、`boss-list.fullList / bottomText / isLoading`、`.chat-record.__vue__.boss`、`.message-item.__vue__.$props.message` 及职位页选择器。它不引入 Vue 运行时，只暴露必要的对象形状。页面结构或源扩展约定变更后，应同步修改适配对象、夹具及集成测试。
+页面保留原插件读取的 `window._PAGE.uid`、App `__vue__.$store.state.userInfo`、`boss-list.fullList / bottomText / isLoading`、`.chat-record.__vue__.boss`、`.message-item.__vue__.$props.message` 及职位页选择器。React 组件通过 DOM ref 暴露这些兼容对象，不引入 Vue 运行时。页面结构或源扩展约定变更后，应同步修改适配对象、夹具及集成测试。

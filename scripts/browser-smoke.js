@@ -1,17 +1,20 @@
-import {spawnSync} from 'node:child_process';
+import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {mkdir, readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
-import {createWorld} from '../mock/fixtures.js';
+import {createWorld} from '../mock/fixtures.ts';
+import {createMockServer} from '../mock/server.ts';
 
 const artifacts = new URL('../artifacts/', import.meta.url);
 await mkdir(artifacts, {recursive: true});
-const origin = process.env.MOCK_ORIGIN ?? 'http://127.0.0.1:4173';
-const main = (await readFile(new URL('../extension/main.js', import.meta.url), 'utf8'))
-  .replace("const MOCK_ORIGIN='http://127.0.0.1:4173';", 'const MOCK_ORIGIN=' + JSON.stringify(origin) + ';');
+const server = process.env.MOCK_ORIGIN ? null : createMockServer();
+if (server) await new Promise((resolve, reject) => {server.once('error', reject); server.listen(0, '127.0.0.1', resolve);});
+const origin = process.env.MOCK_ORIGIN ?? 'http://127.0.0.1:' + server.address().port;
+const main = (await readFile(new URL('../extension/dist/main.js', import.meta.url), 'utf8'))
+  .replace(/const MOCK_ORIGIN\s*=\s*["']http:\/\/127\.0\.0\.1:4173["'];/, 'const MOCK_ORIGIN=' + JSON.stringify(origin) + ';');
 const settings = {
-  origin, main, content: await readFile(new URL('../extension/content.js', import.meta.url), 'utf8'), spaceName: 'Mock BOSS 覆盖验证 ' + Date.now(),
-  core: (await readFile(new URL('../extension/core.js', import.meta.url), 'utf8')).replace(/^export /gm, '') + '\nwindow.__smokeInferStatus = inferStatus; window.__smokeMergeJob = mergeJob;',
+  origin, main, content: await readFile(new URL('../extension/dist/content.js', import.meta.url), 'utf8'), spaceName: 'Mock BOSS 覆盖验证 ' + Date.now(),
+  core: (await readFile(new URL('../extension/dist/core.js', import.meta.url), 'utf8')).replace(/^export\s*\{[^}]+\};?$/gm, '') + '\nwindow.__smokeInferStatus = inferStatus; window.__smokeMergeJob = mergeJob;',
   contactCount: createWorld().conversations.length,
   starCount: createWorld().conversations.filter(item => item.row.brandName === '星河科技').length,
   mockAccount: createHash('sha256').update('boss:mock:mock-geek-beta').digest('hex').slice(0, 24),
@@ -181,9 +184,17 @@ async function smoke(config) {
   console.log({pass: ['源插件 mergeJob 聚合并在浮窗显示：林沐待 Boss 回复、周然待自己回复、何悦待确认']});
 }
 
-const result = spawnSync('ego-browser', ['nodejs', '-e', '(' + smoke.toString() + ')(' + JSON.stringify(settings) + ')'], {stdio: 'inherit'});
-if (result.error) throw result.error;
-if (result.status !== 0) process.exit(result.status ?? 1);
-const finished = spawnSync('ego-browser', ['nodejs', '-e', 'const task = await taskSpace(' + JSON.stringify(settings.spaceName) + '); await task.finish({keep:[]});'], {stdio: 'inherit'});
-if (finished.error) throw finished.error;
-process.exitCode = finished.status ?? 1;
+function browser(script) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('ego-browser', ['nodejs', '-e', script], {stdio: 'inherit'});
+    child.once('error', reject);
+    child.once('exit', code => resolve(code ?? 1));
+  });
+}
+try {
+  const status = await browser('(' + smoke.toString() + ')(' + JSON.stringify(settings) + ')');
+  process.exitCode = status;
+  if (status === 0) process.exitCode = await browser('const task = await taskSpace(' + JSON.stringify(settings.spaceName) + '); await task.finish({keep:[]});');
+} finally {
+  if (server) {server.closeAllConnections(); await new Promise(resolve => server.close(resolve));}
+}

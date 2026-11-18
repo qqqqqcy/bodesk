@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {inferStatus,mergeAutoContribution,mergeJob,validStatus} from '../../extension/core.js';
+import {inferStatus,mergeAutoContribution,mergeJob,validStatus} from '../../extension/dist/core.js';
 
 const msg=(text,time,extra={})=>({text,time,...extra});
 const system=(text,time,extra={})=>msg(text,time,{isSystem:true,...extra});

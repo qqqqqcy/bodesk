@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {webcrypto,createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-const source=await readFile(new URL('../../extension/main.js',import.meta.url),'utf8');
-function harness({switchOnResponse=false,ack=true,failPage=0,pages=1,empty=false,loaded=true,unreadCount=2,responseFor,origin='https://www.zhipin.com'}={}){
+const source=await readFile(new URL('../../extension/dist/main.js',import.meta.url),'utf8');
+function harness({switchOnResponse=false,ack=true,failPage=0,pages=1,empty=false,loaded=true,unreadCount=2,responseFor,clockNow,origin='https://www.zhipin.com'}={}){
   let uid=7;const output=[],requests=[],times=[];let listener;
   const start=performance.now(),clock=()=>Math.floor((performance.now()-start)*1000);
   const row={encryptBossId:'boss-test',securityId:'not-persisted-test-value',encryptJobId:'job-test',name:'test',brandName:'Example',unreadCount,lastIsSelf:false};
@@ -13,7 +13,7 @@ function harness({switchOnResponse=false,ack=true,failPage=0,pages=1,empty=false
   const document={documentElement:null,addEventListener(){},querySelector:()=>null,querySelectorAll:selector=>selector==='*'?[{__vue__:user},{__vue__:list}]:[]};
   const window={postMessage:event=>{const d=event.data;output.push(d);if(d.requestId&&(typeof ack==='function'?ack(d):ack)){const ok=d.type!=='CONVERSATION'||d.history.pages!==failPage;setTimeout(()=>reply(d,ok),0);}},addEventListener:(name,fn)=>{if(name==='message')listener=fn;},fetch:async url=>{const u=new URL(url);requests.push(u);times.push(clock());if(switchOnResponse)uid=8;const custom=responseFor?.(u,requests.length);if(custom)return custom;const page=Number(u.searchParams.get('page')); const data=url.includes('getBossData')?{data:{encryptJobId:'job-test'},job:{jobName:'Test JD',brandName:'Example'}}:{hasMore:page<pages,minMsgId:page,messages:[{mid:page,time:1,from:{uid:100},to:{uid:7},body:{text:'hello'},status:2}]};return {ok:true,json:async()=>({code:0,zpData:data})};}};
   function XHR(){} XHR.prototype.open=function(){};XHR.prototype.send=function(){};
-  const context={window,document,location:{origin,pathname:'/web/geek/chat'},XMLHttpRequest:XHR,crypto:webcrypto,TextEncoder,URL,AbortController,performance:{now:clock},setTimeout:(fn,ms)=>setTimeout(fn,ms===15000?30:Math.ceil(ms/1000)),clearTimeout,setInterval,MutationObserver:class{observe(){}}};
+  const context={window,document,location:{origin,pathname:'/web/geek/chat'},XMLHttpRequest:XHR,crypto:webcrypto,TextEncoder,URL,AbortController,performance:{now:clockNow||clock},setTimeout:(fn,ms)=>setTimeout(fn,ms===15000?30:Math.ceil(ms/1000)),clearTimeout,setInterval,MutationObserver:class{observe(){}}};
   vm.runInNewContext(source,context);
   const mock=origin==='http://127.0.0.1:4173'||origin==='http://localhost:4173';
   const account=createHash('sha256').update((mock?'boss:mock:':'boss:')+'7').digest('hex').slice(0,24);
@@ -159,7 +159,7 @@ test('限流后手动重启也不会立即重试，并遵守 Retry-After',async(
   assert.equal(h.requests.length,1);
 });
 test('首次等待期间可停止，完全不发送请求',async()=>{
-  const h=harness({ack:d=>{
+  const h=harness({clockNow:()=>0,ack:d=>{
     if(d.type==='SYNC_PROGRESS'&&d.sync.message.includes('正在等待'))queueMicrotask(()=>h.command('STOP_SYNC','stop'));
     return true;
   }});

@@ -1,20 +1,21 @@
-import http from 'node:http';
+import http, {type IncomingMessage, type ServerResponse} from 'node:http';
 import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import {resolve} from 'node:path';
+import {resolve, extname, sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {ACCOUNTS, SCENARIOS, createWorld, listRows, jobPageFixtures, historyPage, appendMessage, switchJob} from './fixtures.js';
+import {ACCOUNTS, SCENARIOS, createWorld, listRows, jobPageFixtures, historyPage, appendMessage, switchJob} from './fixtures.ts';
+import type {Connect} from 'vite';
 
-const PUBLIC = new URL('./public/', import.meta.url);
-const ASSETS = {'/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css']};
-const sessionWorld=options=>({...createWorld(options),deletionProbe:randomUUID().replaceAll('-','').slice(0,12)});
+const PUBLIC = resolve(fileURLToPath(new URL('./dist/', import.meta.url)));
+const MIME: Record<string, string> = {'.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json'};
+const sessionWorld=(options?: Parameters<typeof createWorld>[0])=>({...createWorld(options),deletionProbe:randomUUID().replaceAll('-','').slice(0,12)});
 
-function json(response, status, value, headers = {}) {
+function json(response: ServerResponse, status: number, value: unknown, headers: Record<string, string> = {}) {
   response.writeHead(status, {'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers});
   response.end(JSON.stringify(value));
 }
 
-async function bodyOf(request) {
+async function bodyOf(request: IncomingMessage) {
   let content = '';
   for await (const chunk of request) {
     content += chunk;
@@ -23,11 +24,11 @@ async function bodyOf(request) {
   return JSON.parse(content || '{}');
 }
 
-export function createMockServer() {
-  const sessions = new Map();
+export function createMockServer({webMiddleware}: {webMiddleware?: Connect.NextHandleFunction} = {}) {
+  const sessions = new Map<string, ReturnType<typeof sessionWorld>>();
   return http.createServer(async (request, response) => {
     response.setHeader('x-content-type-options', 'nosniff');
-    const url = new URL(request.url, 'http://localhost');
+    const url = new URL(request.url || '/', 'http://localhost');
     if (request.headers.origin && request.headers.origin !== 'http://' + request.headers.host) return json(response, 403, {error: '仅接受同源请求'});
     const cookieName = 'boss_mock';
     let sessionId = request.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith(cookieName + '='))?.slice(cookieName.length + 1);
@@ -36,8 +37,8 @@ export function createMockServer() {
       sessions.set(sessionId, sessionWorld());
       response.setHeader('set-cookie', cookieName + '=' + sessionId + '; HttpOnly; SameSite=Strict; Path=/');
     }
-    const world = sessions.get(sessionId);
-    const ok = value => json(response, 200, value);
+    const world = sessions.get(sessionId)!;
+    const ok = (value: unknown) => json(response, 200, value);
     try {
       if (url.pathname === '/__mock/state' && request.method === 'POST') {
         const options = await bodyOf(request);
@@ -79,12 +80,12 @@ export function createMockServer() {
         const entry = {path: url.pathname, bossId: url.searchParams.get('bossId'), cursor: url.searchParams.get('maxMsgId'), page: url.searchParams.get('page'), at: Date.now(), status: 200};
         world.requests.push(entry);
         if (world.requests.length > 300) world.requests.shift();
-        const fail = (status, value, headers) => {entry.status = status; return json(response, status, value, headers);};
+        const fail = (status: number, value: unknown, headers?: Record<string, string>) => {entry.status = status; return json(response, status, value, headers);};
         if (world.scenario === 'unauthorized') return fail(401, {code: 1, message: 'mock 登录已失效'});
         if (world.scenario === 'forbidden') return fail(403, {code: 37, message: 'mock 需要验证'});
         const conversation = world.conversations.find(item => item.row.encryptBossId === entry.bossId);
         if (!conversation) return fail(404, {code: 404, message: '联系人不存在'});
-        if (world.scenario === 'slow') await new Promise(resolveWait => {
+        if (world.scenario === 'slow') await new Promise<void>(resolveWait => {
           const timer = setTimeout(resolveWait, 16000);
           response.once('close', () => {clearTimeout(timer); resolveWait();});
         });
@@ -105,14 +106,18 @@ export function createMockServer() {
         return ok({code: 0, zpData: conversation.detail});
       }
       if (request.method !== 'GET' && request.method !== 'HEAD') return json(response, 405, {error: '不支持此方法'});
-      const asset = ASSETS[url.pathname];
-      if (!asset && url.pathname !== '/' && url.pathname !== '/web/geek/chat' && url.pathname !== '/web/geek/jobs' && url.pathname !== '/web/geek/recommend' && !/^\/job_detail\/[a-z0-9_-]+\.html$/.test(url.pathname)) return json(response, 404, {error: '页面不存在'});
-      const [file, mime] = asset ?? ['index.html', 'text/html'];
-      const content = await readFile(new URL(file, PUBLIC));
+      if (webMiddleware) return webMiddleware(request, response, () => json(response, 404, {error: '页面不存在'}));
+      const page = ['/', '/web/geek/chat', '/web/geek/jobs', '/web/geek/recommend'].includes(url.pathname) || /^\/job_detail\/[a-z0-9_-]+\.html$/.test(url.pathname);
+      if (!page && !url.pathname.startsWith('/assets/')) return json(response, 404, {error: '页面不存在'});
+      const file = page ? resolve(PUBLIC, 'index.html') : resolve(PUBLIC, '.' + decodeURIComponent(url.pathname));
+      if (!file.startsWith(PUBLIC + sep)) return json(response, 404, {error: '页面不存在'});
+      const mime = MIME[extname(file)] || 'application/octet-stream';
+      let content: Buffer;
+      try {content = await readFile(file);} catch {return json(response, 404, {error: '构建文件不存在，请先运行 npm run build'});}
       response.writeHead(200, {'content-type': mime + '; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'"});
       response.end(request.method === 'HEAD' ? undefined : content);
     } catch (error) {
-      if (!response.headersSent) json(response, 400, {error: error.message});
+      if (!response.headersSent) json(response, 400, {error: error instanceof Error ? error.message : '模拟服务错误'});
       else response.end();
     }
   });
@@ -121,5 +126,5 @@ export function createMockServer() {
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   const port = Number(process.env.PORT ?? 4173);
   const server = createMockServer();
-  server.listen(port, '127.0.0.1', () => console.log('Mock BOSS: http://127.0.0.1:' + server.address().port + '/web/geek/chat'));
+  server.listen(port, '127.0.0.1', () => console.log('Mock BOSS: http://127.0.0.1:' + (server.address() as import('node:net').AddressInfo).port + '/web/geek/chat'));
 }

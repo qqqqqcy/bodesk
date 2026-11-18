@@ -3,19 +3,36 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node mock/server.js",
-    "dev": "node --watch mock/server.js",
-    "test": "node --test tests/extension/*.test.js tests/mock/*.test.js",
-    "test:extension": "node --test tests/extension/*.test.js",
-    "test:mock": "node --test tests/mock/*.test.js",
-    "test:browser": "node scripts/browser-smoke.js",
-    "check": "node scripts/check.js",
+    "start": "npm run build && tsx mock/server.ts",
+    "dev": "tsx watch --exclude extension/dist --exclude mock/dist scripts/dev.ts",
+    "build": "tsc --noEmit && tsx scripts/build.ts",
+    "build:extension": "tsx scripts/build.ts --extension",
+    "typecheck": "tsc --noEmit",
+    "pretest": "npm run build",
+    "test": "node --import tsx --test tests/extension/*.test.js tests/mock/*.test.js",
+    "pretest:extension": "npm run build:extension",
+    "test:extension": "node --import tsx --test tests/extension/*.test.js",
+    "pretest:mock": "npm run build",
+    "test:mock": "node --import tsx --test tests/mock/*.test.js",
+    "pretest:browser": "npm run build",
+    "test:browser": "node --import tsx scripts/browser-smoke.js",
+    "check": "npm run typecheck && node scripts/check.js",
     "research:export": "node research/chat-export/export-sample.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
+  "dependencies": {"react": "^19.3.1", "react-dom": "^19.3.1"},
   "devDependencies": {
-    "fake-indexeddb": "^6.2.8"
+    "@types/chrome": "^0.1.33",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "fake-indexeddb": "^6.2.8",
+    "jsdom": "^31.0.1",
+    "tsx": "^4.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
   }
 }

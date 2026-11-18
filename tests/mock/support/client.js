@@ -1,4 +1,4 @@
-import {createMockServer} from '../../../mock/server.js';
+import {createMockServer} from '../../../mock/server.ts';
 
 export async function clientFor(context) {
   const server = createMockServer();

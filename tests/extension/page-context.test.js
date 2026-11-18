@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
 import {webcrypto} from 'node:crypto';
-import {createWorld, jobPageFixtures} from '../../mock/fixtures.js';
+import {createWorld, jobPageFixtures} from '../../mock/fixtures.ts';
 
-const source=await readFile(new URL('../../extension/main.js',import.meta.url),'utf8');
+const source=await readFile(new URL('../../extension/dist/main.js',import.meta.url),'utf8');
 
 function harness(origin='https://www.zhipin.com'){
   const output=[],requests=[],elements=new Map();

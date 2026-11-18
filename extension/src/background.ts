@@ -1,22 +1,29 @@
-import {inferStatus, mergeAutoContribution, mergeJob, validStatus} from './core.js';
+import type {ExternalRecord, Contributions, HumanMessagePreview} from './types.ts';
+type Change = [string, 'put' | 'delete', any];
+
+import {inferStatus, isHuman, mergeAutoContribution, mergeJob, validStatus} from './core.ts';
+import {registerBuildReload} from './build-reload.ts';
 const DB_NAME='boss-local-helper', DB_VERSION=2, STATUS_SCHEMA=5;
 const SITE_ORIGINS=['https://www.zhipin.com','http://127.0.0.1:4173','http://localhost:4173'];
-const siteOrigin=value=>{try{const url=new URL(value);return SITE_ORIGINS.includes(url.origin)?url.origin:null;}catch{return null;}};
-const sourceGroup=value=>{const origin=siteOrigin(value);return !origin?null:origin===SITE_ORIGINS[0]?'real':'mock';};
-const jobOrigin=(value,fallback)=>{try{const url=new URL(value);return siteOrigin(value)&&url.pathname.startsWith('/job_detail/')?url.origin:fallback;}catch{return fallback;}};
+const siteOrigin=(value?: string)=>{try{const url=new URL(value || '');return SITE_ORIGINS.includes(url.origin)?url.origin:null;}catch{return null;}};
+const sourceGroup=(value?: string)=>{const origin=siteOrigin(value);return !origin?null:origin===SITE_ORIGINS[0]?'real':'mock';};
+const jobOrigin=(value: string | undefined,fallback: string | null)=>{try{const url=new URL(value || '');return siteOrigin(value)&&url.pathname.startsWith('/job_detail/')?url.origin:fallback;}catch{return fallback;}};
 const stores=['companies','jobs','conversations','messages','events','meta'];
-const dbPromise=new Promise((resolve,reject)=>{const req=indexedDB.open(DB_NAME,DB_VERSION);req.onupgradeneeded=()=>{for(const s of stores)if(!req.result.objectStoreNames.contains(s))req.result.createObjectStore(s,{keyPath:'id'});const messages=req.transaction.objectStore('messages');if(!messages.indexNames.contains('conversationId'))messages.createIndex('conversationId','conversationId');};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
-async function op(store, method, value) {const db=await dbPromise;return new Promise((resolve,reject)=>{const tx=db.transaction(store,method==='get'||method==='getAll'?'readonly':'readwrite');let result;const req=tx.objectStore(store)[method](value);req.onsuccess=()=>{result=req.result;};tx.oncomplete=()=>resolve(result);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('数据库写入中断'));});}
-async function conversationMessages(id){const db=await dbPromise;return new Promise((resolve,reject)=>{const tx=db.transaction('messages','readonly');const req=tx.objectStore('messages').index('conversationId').getAll(id);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
-async function commit(changes){const db=await dbPromise;return new Promise((resolve,reject)=>{const tx=db.transaction(['companies','jobs','conversations','messages','events'],'readwrite');try{for(const [store,method,value] of changes)tx.objectStore(store)[method](value);}catch(error){tx.abort();reject(error);return;}tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('数据库写入失败'));tx.onabort=()=>reject(tx.error||new Error('数据库写入中断'));});}
-let queue=Promise.resolve();
-function serialize(fn){const run=queue.then(fn);queue=run.catch(()=>{});return run;}
-const key=(a,id)=>`${a}:${id}`;
-const earliest=(...values)=>values.reduce((min,value)=>typeof value==='number'&&Number.isFinite(value)&&value>0&&(!min||value<min)?value:min,0);
-const companyKey=(account,name)=>key(account,'company:'+name.normalize('NFKC').trim().toLowerCase());
-const validJobId=(account,id)=>typeof id==='string'&&id.length<=200&&id.startsWith(key(account,'job:'))&&!!id.slice(key(account,'job:').length).trim();
-function validateNote(note){if(typeof note!=='string'||note.length>10000)throw new Error('备注需为不超过 10000 字的文本');}
-async function noteCompany(account,id,name){
+const dbPromise=new Promise<IDBDatabase>((resolve,reject)=>{const req=indexedDB.open(DB_NAME,DB_VERSION);req.onupgradeneeded=()=>{for(const s of stores)if(!req.result.objectStoreNames.contains(s))req.result.createObjectStore(s,{keyPath:'id'});const messages=req.transaction!.objectStore('messages');if(!messages.indexNames.contains('conversationId'))messages.createIndex('conversationId','conversationId');};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
+function op(store: string, method: 'getAll', value?: IDBValidKey): Promise<ExternalRecord[]>;
+function op(store: string, method: 'get', value: IDBValidKey): Promise<ExternalRecord | undefined>;
+function op(store: string, method: 'put' | 'delete', value: any): Promise<unknown>;
+async function op(store: string, method: 'get' | 'getAll' | 'put' | 'delete', value?: any) {const db=await dbPromise;return new Promise((resolve,reject)=>{const tx=db.transaction(store,method==='get'||method==='getAll'?'readonly':'readwrite');let result: unknown;const req=tx.objectStore(store)[method](value);req.onsuccess=()=>{result=req.result;};tx.oncomplete=()=>resolve(result);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('数据库写入中断'));});}
+async function conversationMessages(id: string): Promise<ExternalRecord[]>{const db=await dbPromise;return new Promise((resolve,reject)=>{const tx=db.transaction('messages','readonly');const req=tx.objectStore('messages').index('conversationId').getAll(id);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
+async function commit(changes: Change[]){const db=await dbPromise;return new Promise<void>((resolve,reject)=>{const tx=db.transaction(['companies','jobs','conversations','messages','events'],'readwrite');try{for(const [store,method,value] of changes)tx.objectStore(store)[method](value);}catch(error: any){tx.abort();reject(error);return;}tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('数据库写入失败'));tx.onabort=()=>reject(tx.error||new Error('数据库写入中断'));});}
+let queue: Promise<unknown>=Promise.resolve();
+function serialize<Result>(fn: () => Result | Promise<Result>){const run=queue.then(fn);queue=run.catch(()=>{});return run;}
+const key=(a: string,id: string)=>`${a}:${id}`;
+const earliest=(...values: unknown[])=>values.reduce<number>((min,value)=>typeof value==='number'&&Number.isFinite(value)&&value>0&&(!min||value<min)?value:min,0);
+const companyKey=(account: string,name: string)=>key(account,'company:'+name.normalize('NFKC').trim().toLowerCase());
+const validJobId=(account: string,id: unknown)=>typeof id==='string'&&id.length<=200&&id.startsWith(key(account,'job:'))&&!!id.slice(key(account,'job:').length).trim();
+function validateNote(note: unknown){if(typeof note!=='string'||note.length>10000)throw new Error('备注需为不超过 10000 字的文本');}
+async function noteCompany(account: string,id: string,name?: string): Promise<ExternalRecord>{
   if(typeof id!=='string'||!id.startsWith(key(account,'company:')))throw new Error('无效公司 ID');
   if(name!==undefined&&(typeof name!=='string'||!name.normalize('NFKC').trim()||name.length>180))throw new Error('无效公司名称');
   const existing=await op('companies','get',id);
@@ -24,7 +31,7 @@ async function noteCompany(account,id,name){
   if(name===undefined||id!==companyKey(account,name))throw new Error('公司 ID 与名称不匹配');
   return {id,account,name:name.trim()};
 }
-async function saveJob(message,origin){
+async function saveJob(message: ExternalRecord,origin?: string | null){
   if(typeof message.account!=='string'||!message.account)throw new Error('请选择账号');
   const account=await resolveAccount(message.account);
   if(!validJobId(account,message.jobId))throw new Error('无效 JD ID');
@@ -51,19 +58,19 @@ async function saveJob(message,origin){
     await ensureStatusSchema(account);
     job=await op('jobs','get',message.jobId);
   }
-  const next={...job,updatedAt:Date.now()};
+  const next: ExternalRecord={...job,updatedAt:Date.now()};
   if(hasNote)next.note=message.note;
   if(hasStatus){next.manualStatus=message.status==='auto'?null:message.status;next.manual=!!next.manualStatus;next.status=next.manualStatus||next.autoStatus||'unknown';}
-  const changes=[['jobs','put',next]];
+  const changes: Change[]=[['jobs','put',next]];
   if(company)changes.unshift(['companies','put',company]);
-  if(hasStatus&&job.status!==next.status)changes.push(['events','put',{id:key(account,crypto.randomUUID()),account,jobId:next.id,status:next.status,source:'manual',evidence:message.status==='auto'?'恢复自动状态':'用户修订',time:Date.now()}]);
+  if(hasStatus&&job?.status!==next.status)changes.push(['events','put',{id:key(account,crypto.randomUUID()),account,jobId:next.id,status:next.status,source:'manual',evidence:message.status==='auto'?'恢复自动状态':'用户修订',time:Date.now()}]);
   await commit(changes);
   return {ok:true};
 }
-async function meta(id,fallback){return (await op('meta','get',id))?.value??fallback;}
-async function setMeta(id,value){await op('meta','put',{id,value});}
+async function meta(id: string,fallback: unknown){return (await op('meta','get',id))?.value??fallback;}
+async function setMeta(id: string,value: unknown){await op('meta','put',{id,value});}
 async function currentAccount(){return meta('activeAccount',null);}
-async function accountSource(account,expected){
+async function accountSource(account: string,expected?: string | null){
   let group=await meta(key(account,'sourceGroup'),null);
   if(!group){
     const groups=new Set((await op('jobs','getAll')).filter(j=>j.account===account&&jobOrigin(j.url,null)).map(j=>sourceGroup(j.url)));
@@ -75,7 +82,7 @@ async function accountSource(account,expected){
   if(!['real','mock'].includes(group)||expected&&group!==expected)throw new Error('账号与页面来源不匹配');
   return group;
 }
-async function registerAccount(account,group){
+async function registerAccount(account: string,group: string){
   const accounts=await meta('accounts',[]),active=await currentAccount();
   let known=accounts.includes(account)||active===account;
   if(!known)for(const store of stores.filter(s=>s!=='meta'))if((await op(store,'getAll')).some(record=>record.account===account)){known=true;break;}
@@ -83,19 +90,19 @@ async function registerAccount(account,group){
   else await setMeta(key(account,'sourceGroup'),group);
   if(active&&!accounts.includes(active))accounts.push(active);if(!accounts.includes(account))accounts.push(account);await setMeta('accounts',accounts);if(!active)await setMeta('activeAccount',account);
 }
-async function requireSiteAccount(account,sender){
+async function requireSiteAccount(account: string,sender: chrome.runtime.MessageSender){
   if(typeof account!=='string'||!account)throw new Error('页面账号尚未识别，请稍后重试');
   await resolveAccount(account);
   await accountSource(account,sourceGroup(sender.url));
-  let bound=tabAccounts.get(sender.tab.id);
-  if(!bound){const saved=await meta('tab-binding:'+sender.tab.id,null);if(saved?.group===sourceGroup(sender.url)){bound=saved.account;tabAccounts.set(sender.tab.id,bound);}}
+  let bound=tabAccounts.get(sender.tab!.id);
+  if(!bound){const saved=await meta('tab-binding:'+sender.tab!.id,null);if(saved?.group===sourceGroup(sender.url)){bound=saved.account;tabAccounts.set(sender.tab!.id,bound!);}}
   if(bound!==account)throw new Error('页面账号尚未识别或不匹配，请刷新页面');
 }
-async function resolveAccount(requested){const accounts=await meta('accounts',[]), account=requested===undefined?await currentAccount():requested;if(!accounts.includes(account))throw new Error('未知账号');return account;}
-async function addEvent(account,jobId,status,source,evidence){await op('events','put',{id:key(account,crypto.randomUUID()),account,jobId,status,source,evidence,time:Date.now()});}
-const tabAccounts=new Map();
+async function resolveAccount(requested?: string | null): Promise<string>{const accounts=await meta('accounts',[]), account=requested===undefined?await currentAccount():requested;if(!accounts.includes(account))throw new Error('未知账号');return account;}
+async function addEvent(account: string,jobId: string,status: string,source: string,evidence: string){await op('events','put',{id:key(account,crypto.randomUUID()),account,jobId,status,source,evidence,time:Date.now()});}
+const tabAccounts=new Map<number | undefined, string>();
 const RUN_LEASE_MS=90000;
-async function syncTask(account){
+async function syncTask(account: string){
   let task=await meta(key(account,'sync'),{});
   if(task.running&&(!task.runId||!Number.isInteger(task.tabId)||Date.now()-(Number(task.updatedAt)||0)>RUN_LEASE_MS)){
     task={...task,running:false,complete:false,interrupted:true,message:'同步已中断，可重试',updatedAt:Date.now()};
@@ -103,12 +110,18 @@ async function syncTask(account){
   }
   return task;
 }
-async function requireRun(d,sender){
+if (chrome.alarms) registerBuildReload(reload => serialize(async () => {
+  for (const account of await meta('accounts', [])) {
+    if ((await syncTask(account)).running) return;
+  }
+  await reload();
+}));
+async function requireRun(d: ExternalRecord,sender: chrome.runtime.MessageSender){
   const task=await syncTask(d.account);
-  if(!task.running||!d.runId||task.runId!==d.runId||task.tabId!==sender.tab.id)throw new Error('同步任务已过期或不属于此标签页');
+  if(!task.running||!d.runId||task.runId!==d.runId||task.tabId!==sender.tab!.id)throw new Error('同步任务已过期或不属于此标签页');
   return task;
 }
-function invalidateTab(id){
+function invalidateTab(id: number){
   tabAccounts.delete(id);
   serialize(async()=>{
     await op('meta','delete','tab-binding:'+id);
@@ -120,18 +133,18 @@ function invalidateTab(id){
 }
 chrome.tabs.onRemoved.addListener(invalidateTab);
 chrome.tabs.onUpdated.addListener((id,change)=>{if(change.url||change.status==='loading')invalidateTab(id);});
-function validate(value,depth=0){if(depth>8)throw new Error('数据结构过深');if(typeof value==='string'&&value.length>6000)throw new Error('字符串过长');if(typeof value==='number'&&!Number.isFinite(value))throw new Error('无效数字');if(value&&typeof value==='object'){if(Array.isArray(value)){if(value.length>10000)throw new Error('数据过多');for(const item of value)validate(item,depth+1);}else{const entries=Object.entries(value);if(entries.length>100)throw new Error('字段过多');for(const [name,item] of entries){if(name.length>100||name==='__proto__'||name==='constructor'||name==='prototype')throw new Error('无效字段');if((name==='id'||name==='jobId'||name==='selectedId'||name==='conversationId')&&item!=null&&(typeof item!=='string'||item.length>200))throw new Error('无效 ID');validate(item,depth+1);}}}}
-function validateIngest(d){if(!d||typeof d!=='object'||Array.isArray(d)||typeof d.account!=='string'||!/^[a-f0-9]{24}$/.test(d.account))throw new Error('未识别账号');validate(d);if(d.type==='SNAPSHOT'&&(!Array.isArray(d.rows)||d.rows.length>10000||d.liveMessages!==undefined&&(!Array.isArray(d.liveMessages)||d.liveMessages.length>2000)))throw new Error('无效会话列表');if(d.type==='CONVERSATION'&&(!d.row||typeof d.row!=='object'||Array.isArray(d.row)||!d.row.id||!Array.isArray(d.messages||[])||(d.messages||[]).length>2000))throw new Error('无效会话数据');if(d.type==='SNAPSHOT'&&d.rows.some(row=>!row||typeof row!=='object'||Array.isArray(row)||!row.id))throw new Error('无效会话数据');if(d.type==='CONVERSATION'&&((d.detail!=null&&(typeof d.detail!=='object'||Array.isArray(d.detail)))||(d.history!=null&&(typeof d.history!=='object'||Array.isArray(d.history)))||(d.messages||[]).some(m=>!m||typeof m!=='object'||Array.isArray(m))))throw new Error('无效会话数据');for(const row of d.type==='SNAPSHOT'?d.rows:d.type==='CONVERSATION'?[d.row]:[]){for(const field of ['name','companyName','jobId','jobTitle','lastText'])if(row[field]!=null&&typeof row[field]!=='string')throw new Error('无效会话字段');}for(const field of ['companyName','jobId','title','salary','location','experience','degree'])if(d.detail?.[field]!=null&&typeof d.detail[field]!=='string')throw new Error('无效职位字段');if(d.type==='SYNC_PROGRESS'&&(!d.sync||typeof d.sync!=='object'||Array.isArray(d.sync)||typeof d.sync.running!=='boolean'))throw new Error('无效同步进度');}
-function validateFavorites(rows){
+function validate(value: unknown,depth=0){if(depth>8)throw new Error('数据结构过深');if(typeof value==='string'&&value.length>6000)throw new Error('字符串过长');if(typeof value==='number'&&!Number.isFinite(value))throw new Error('无效数字');if(value&&typeof value==='object'){if(Array.isArray(value)){if(value.length>10000)throw new Error('数据过多');for(const item of value)validate(item,depth+1);}else{const entries=Object.entries(value);if(entries.length>100)throw new Error('字段过多');for(const [name,item] of entries){if(name.length>100||name==='__proto__'||name==='constructor'||name==='prototype')throw new Error('无效字段');if((name==='id'||name==='jobId'||name==='selectedId'||name==='conversationId')&&item!=null&&(typeof item!=='string'||item.length>200))throw new Error('无效 ID');validate(item,depth+1);}}}}
+function validateIngest(d: ExternalRecord){if(!d||typeof d!=='object'||Array.isArray(d)||typeof d.account!=='string'||!/^[a-f0-9]{24}$/.test(d.account))throw new Error('未识别账号');validate(d);if(d.type==='SNAPSHOT'&&(!Array.isArray(d.rows)||d.rows.length>10000||d.liveMessages!==undefined&&(!Array.isArray(d.liveMessages)||d.liveMessages.length>2000)))throw new Error('无效会话列表');if(d.type==='CONVERSATION'&&(!d.row||typeof d.row!=='object'||Array.isArray(d.row)||!d.row.id||!Array.isArray(d.messages||[])||(d.messages||[]).length>2000))throw new Error('无效会话数据');if(d.type==='SNAPSHOT'&&d.rows.some((row: ExternalRecord)=>!row||typeof row!=='object'||Array.isArray(row)||!row.id))throw new Error('无效会话数据');if(d.type==='CONVERSATION'&&((d.detail!=null&&(typeof d.detail!=='object'||Array.isArray(d.detail)))||(d.history!=null&&(typeof d.history!=='object'||Array.isArray(d.history)))||(d.messages||[]).some((m: ExternalRecord)=>!m||typeof m!=='object'||Array.isArray(m))))throw new Error('无效会话数据');for(const row of d.type==='SNAPSHOT'?d.rows:d.type==='CONVERSATION'?[d.row]:[]){for(const field of ['name','companyName','jobId','jobTitle','lastText'])if(row[field]!=null&&typeof row[field]!=='string')throw new Error('无效会话字段');}for(const field of ['companyName','jobId','title','salary','location','experience','degree'])if(d.detail?.[field]!=null&&typeof d.detail[field]!=='string')throw new Error('无效职位字段');if(d.type==='SYNC_PROGRESS'&&(!d.sync||typeof d.sync!=='object'||Array.isArray(d.sync)||typeof d.sync.running!=='boolean'))throw new Error('无效同步进度');}
+function validateFavorites(rows: ExternalRecord[]){
   if(!Array.isArray(rows)||rows.length>10000)throw new Error('无效收藏列表');
   for(const row of rows){
     if(!row||typeof row!=='object'||Array.isArray(row)||typeof row.jobId!=='string'||!/^[a-zA-Z0-9_-]{1,150}$/.test(row.jobId)||typeof row.favorite!=='boolean')throw new Error('无效收藏职位');
-    for(const [field,max] of [['companyName',180],['title',200],['salary',100],['location',100],['experience',100],['degree',100]])if(row[field]!=null&&(typeof row[field]!=='string'||row[field].length>max))throw new Error('无效收藏字段');
+    for(const [field,max] of [['companyName',180],['title',200],['salary',100],['location',100],['experience',100],['degree',100]] as const)if(row[field]!=null&&(typeof row[field]!=='string'||row[field].length>max))throw new Error('无效收藏字段');
     if(row.favorite&&(!row.companyName?.trim()||!row.title?.trim()))throw new Error('收藏职位缺少公司或标题');
   }
 }
-async function ingestFavorites(account,rows,origin){
-  const changes=[];
+async function ingestFavorites(account: string,rows: ExternalRecord[],origin: string){
+  const changes: Change[]=[];
   for(const row of new Map(rows.map(row=>[row.jobId,row])).values()){
     const id=key(account,'job:'+row.jobId),previous=await op('jobs','get',id);
     if(previous?.deleted)continue;
@@ -139,7 +152,7 @@ async function ingestFavorites(account,rows,origin){
     const companyId=previous?.companyId||(row.favorite?companyKey(account,row.companyName):null);
     const company=companyId?await op('companies','get',companyId):null;
     if(row.favorite&&!company)changes.push(['companies','put',{id:companyId,account,name:row.companyName.trim(),updatedAt:Date.now()}]);
-    const next=previous?{...previous}:{id,account,companyId,title:row.title.trim(),status:'unknown',autoStatus:'unknown',manual:false,manualStatus:null,autoContributions:{},autoSchemaVersion:STATUS_SCHEMA,conversationIds:[],firstConversationAt:0};
+    const next: ExternalRecord=previous?{...previous}:{id,account,companyId,title:row.title.trim(),status:'unknown',autoStatus:'unknown',manual:false,manualStatus:null,autoContributions:{},autoSchemaVersion:STATUS_SCHEMA,conversationIds:[],firstConversationAt:0};
     next.favorite=row.favorite;
     next.url=jobOrigin(previous?.url,origin)+'/job_detail/'+encodeURIComponent(row.jobId)+'.html';
     for(const field of ['salary','location','experience','degree'])if(!next[field]&&row[field])next[field]=row[field];
@@ -147,24 +160,24 @@ async function ingestFavorites(account,rows,origin){
   }
   if(changes.length){await commit(changes);chrome.runtime.sendMessage?.({type:'FAVORITES_CHANGED',account})?.catch(()=>{});}
 }
-async function ingestBatch(account,items,selectedId,origin='https://www.zhipin.com'){
-  const changes=[], cache=new Map();let summary=null,legacyConversations;
-  async function get(store,id){const k=store+'\0'+id;if(!cache.has(k))cache.set(k,await op(store,'get',id));return cache.get(k);}
-  function put(store,value){cache.set(store+'\0'+value.id,value);changes.push([store,'put',value]);}
-  function remove(store,id){cache.set(store+'\0'+id,undefined);changes.push([store,'delete',id]);}
-  function contribution(row,messages,jobToken,multiple){
+async function ingestBatch(account: string,items: ExternalRecord[],selectedId?: string,origin='https://www.zhipin.com'){
+  const changes: Change[]=[], cache=new Map();let summary: ExternalRecord | null=null,legacyConversations: ExternalRecord[] | undefined;
+  async function get(store: string,id: string): Promise<ExternalRecord | undefined>{const k=store+'\0'+id;if(!cache.has(k))cache.set(k,await op(store,'get',id));return cache.get(k);}
+  function put(store: string,value: ExternalRecord){cache.set(store+'\0'+value.id,value);changes.push([store,'put',value]);}
+  function remove(store: string,id: string){cache.set(store+'\0'+id,undefined);changes.push([store,'delete',id]);}
+  function contribution(row: ExternalRecord,messages: ExternalRecord[],jobToken: string,multiple: boolean){
     const verified=inferStatus({},messages.filter(m=>m.jobId===jobToken));
     if(multiple)return {verified};
     const unverified=inferStatus(row,messages.filter(m=>!m.jobId));
     unverified.evidence+='；联系人当前JD关联，历史归属未独立验证';
     return {verified,unverified};
   }
-  async function migrateContributions(job){
+  async function migrateContributions(job: ExternalRecord | null | undefined){
     if(!job||job.autoContributions&&job.autoSchemaVersion===STATUS_SCHEMA)return job;
     legacyConversations??=await op('conversations','getAll');
     // Older records may only retain the last contact; include stored backlinks before attributing anything.
     const related=legacyConversations.filter(c=>c.account===account&&c.jobIds?.includes(job.id)).map(c=>c.id);
-    const ids=[...new Set([...(job.conversationIds||[]),job.conversationId,...related].filter(Boolean))],autoContributions={};
+    const ids=[...new Set([...(job.conversationIds||[]),job.conversationId,...related].filter(Boolean))],autoContributions: Record<string, Contributions>={};
     const jobToken=job.id.slice(key(account,'job:').length);
     for(const id of ids){
       const conversation=await get('conversations',id);
@@ -188,7 +201,7 @@ async function ingestBatch(account,items,selectedId,origin='https://www.zhipin.c
     for(const m of messages){if(!m.id)continue;const id=key(account,'message:'+row.id+':'+m.id),old=saved.get(id);const item={...old,...m,id,messageId:m.id,account,conversationId:cid};if(m.isSystem==null&&typeof old?.isSystem==='boolean')item.isSystem=old.isSystem;if((!m.text)&&old?.text)item.text=old.text;if(m.direction==='unknown'&&old?.direction){item.direction=old.direction;item.directionBasis=old.directionBasis||'legacy';}if(!m.time&&old?.time)item.time=old.time;if(m.templateId==null&&old?.templateId!=null)item.templateId=old.templateId;saved.set(item.id,item);put('messages',item);}
     const firstMessageAt=earliest(prev?.firstMessageAt,...[...saved.values()].map(m=>m.time));
     const pendingId=key(account,'job:pending:'+row.id);
-    const jobIds=[...new Set([...(prev?.jobIds||[]).filter(id=>id!==pendingId||id===jid),...(jid?[jid]:[])])];
+    const jobIds=[...new Set([...(prev?.jobIds||[]).filter((id: string)=>id!==pendingId||id===jid),...(jid?[jid]:[])])];
     let next;
     if(jid&&!storedPrevious?.deleted){
       const multiple=jobIds.length>1;
@@ -196,7 +209,7 @@ async function ingestBatch(account,items,selectedId,origin='https://www.zhipin.c
       if(multiple)for(const oldId of jobIds.filter(id=>id!==jid)){
         const old=await get('jobs',oldId);
         if(!old||old.deleted)continue;
-        const migrated=await migrateContributions(old);
+        const migrated=(await migrateContributions(old))!;
         const value=mergeAutoContribution(migrated.autoContributions[cid],contribution({},observations,oldId.slice(key(account,'job:').length),true),true);
         const updated=mergeJob(migrated,{autoContributions:{...migrated.autoContributions,[cid]:value},firstConversationAt:earliest(migrated.firstConversationAt,firstMessageAt),updatedAt:Date.now()});
         put('jobs',updated);
@@ -207,7 +220,7 @@ async function ingestBatch(account,items,selectedId,origin='https://www.zhipin.c
       const pending=await get('jobs',pendingId);if(pending&&pendingId!==jid){
         next.firstConversationAt=earliest(next.firstConversationAt,pending.firstConversationAt);
         const conflicts=[...(Array.isArray(next.noteConflicts)?next.noteConflicts:[])];
-        const addConflict=entry=>{if(!conflicts.some(x=>x.sourceId===entry.sourceId&&x.text===entry.text))conflicts.push(entry);};
+        const addConflict=(entry: ExternalRecord)=>{if(!conflicts.some(x=>x.sourceId===entry.sourceId&&x.text===entry.text))conflicts.push(entry);};
         if(Array.isArray(pending.noteConflicts))for(const entry of pending.noteConflicts)addConflict(entry);
         if(pending.note){if(!next.note)next.note=pending.note;else if(next.note!==pending.note)addConflict({sourceId:pendingId,text:pending.note});}
         if(conflicts.length)next.noteConflicts=conflicts;
@@ -243,14 +256,14 @@ async function ingestBatch(account,items,selectedId,origin='https://www.zhipin.c
   await commit(changes);return summary;
 }
 // Backfill from local messages and both directions of the historical association.
-async function ensureConversationOrder(account){
+async function ensureConversationOrder(account: string){
   if(await meta(key(account,'conversationOrderVersion'),0)===1)return;
   const jobs=(await op('jobs','getAll')).filter(j=>j.account===account);
   const conversations=(await op('conversations','getAll')).filter(c=>c.account===account);
   const messages=(await op('messages','getAll')).filter(m=>m.account===account);
   const times=new Map();
   for(const m of messages)times.set(m.conversationId,earliest(times.get(m.conversationId),m.time));
-  const changes=[],byId=new Map();
+  const changes: Change[]=[],byId=new Map();
   for(const c of conversations){
     const time=earliest(c.firstMessageAt,times.get(c.id));byId.set(c.id,time);
     changes.push(['conversations','put',{...c,firstMessageAt:time}]);
@@ -264,9 +277,9 @@ async function ensureConversationOrder(account){
   await setMeta(key(account,'conversationOrderVersion'),1);
 }
 // Normalize interview stages independently of automatic status schema and current conversations.
-async function migrateInterviews(account){
-  const normalize=value=>typeof value==='string'&&/^interview_[1-9]\d*$/.test(value)?'interviewing':value;
-  const jobs=(await op('jobs','getAll')).filter(j=>j.account===account),changes=[];
+async function migrateInterviews(account: string){
+  const normalize=(value: unknown)=>typeof value==='string'&&/^interview_[1-9]\d*$/.test(value)?'interviewing':value;
+  const jobs=(await op('jobs','getAll')).filter(j=>j.account===account),changes: Change[]=[];
   for(const job of jobs){
     if(job.deleted)continue;
     const manualStatus=normalize(job.manualStatus)||(job.manual&&normalize(job.status)==='interviewing'?'interviewing':job.manualStatus);
@@ -278,7 +291,7 @@ async function migrateInterviews(account){
   if(settings?.value&&Object.hasOwn(settings.value,'interviewRounds')){const {interviewRounds,...rest}=settings.value;await setMeta(settings.id,rest);}
 }
 // Recompute old automatic states from local messages before any view or manual reset.
-async function ensureStatusSchema(account){
+async function ensureStatusSchema(account: string){
   if(!account)return;
   await migrateInterviews(account);
   const old=(await op('jobs','getAll')).filter(j=>j.account===account&&j.autoSchemaVersion!==STATUS_SCHEMA);
@@ -290,16 +303,44 @@ async function ensureStatusSchema(account){
   const remaining=(await op('jobs','getAll')).filter(j=>j.account===account&&j.autoSchemaVersion!==STATUS_SCHEMA);
   if(remaining.length)await commit(remaining.map(j=>['jobs','put',{...j,autoContributions:{},autoSchemaVersion:STATUS_SCHEMA,autoStatus:'unknown',autoLabel:'未知',evidence:'旧记录缺少可关联的会话，无法按新规则确认',status:j.manualStatus||'unknown',manual:!!j.manualStatus}]));
 }
-function visibleJobs(jobs,conversations){
+function visibleJobs(jobs: ExternalRecord[],conversations: ExternalRecord[]){
   const conversationIds=new Set(conversations.map(conversation=>conversation.id));
   const jobIds=new Set(conversations.flatMap(conversation=>Array.isArray(conversation.jobIds)?conversation.jobIds:[]));
   return jobs.filter(job=>!job.deleted&&(job.favorite!==false||jobIds.has(job.id)||conversationIds.has(job.conversationId)||(Array.isArray(job.conversationIds)&&job.conversationIds.some(id=>conversationIds.has(id)))));
 }
-async function data(account,includeHidden=false){const accounts=await meta('accounts',[]);const result={account,accounts,settings:{},sync:await syncTask(account)};for(const s of stores.filter(s=>s!=='meta'&&s!=='messages'))result[s]=(await op(s,'getAll')).filter(x=>x.account===account);result.jobs=result.jobs.filter(job=>!job.deleted);if(!includeHidden)result.jobs=visibleJobs(result.jobs,result.conversations);const referenced=new Set([...result.jobs,...result.conversations].map(x=>x.companyId).filter(Boolean));result.companies=result.companies.filter(x=>referenced.has(x.id)||typeof x.note==='string'&&x.note.length>0);return result;}
-async function bossTab(account){const tabs=await chrome.tabs.query({url:SITE_ORIGINS.map(origin=>origin+'/web/geek/chat*')});const group=await accountSource(account);for(const tab of tabs){if(!tabAccounts.has(tab.id)&&sourceGroup(tab.url)===group){try{const r=await chrome.tabs.sendMessage(tab.id,{type:'ACCOUNT_INFO'});if(r?.account===account)tabAccounts.set(tab.id,r.account);}catch{}}}const matching=tabs.filter(t=>tabAccounts.get(t.id)===account&&(!t.url||sourceGroup(t.url)===group));if(!matching.length)throw new Error('没有与该账号匹配的 BOSS 聊天页，请打开并刷新页面');return matching.find(t=>t.active)||matching[matching.length-1];}
-chrome.action.onClicked.addListener(tab=>chrome.tabs.create({url:chrome.runtime.getURL('dashboard.html'),...(Number.isInteger(tab?.windowId)?{windowId:tab.windowId}:{})}));
+const messageIdOrder = new Intl.Collator('en', {numeric: true});
+async function latestJobMessages(account: string, related: ExternalRecord[], allJobs: ExternalRecord[], conversations: ExternalRecord[]) {
+  if (!related.length) return new Map<string, HumanMessagePreview>();
+  const relevantJobIds = new Set(related.map(job => job.id));
+  const associations = new Map<string, Set<string>>(conversations.map(conversation => [conversation.id, new Set(conversation.jobIds || [])]));
+  for (const job of allJobs) {
+    for (const conversationId of [...(job.conversationIds || []), job.conversationId]) associations.get(conversationId)?.add(job.id);
+  }
+
+  const latest = new Map<string, HumanMessagePreview & {time: number; messageId: string}>();
+  for (const [conversationId, jobIds] of associations) {
+    if (![...jobIds].some(jobId => relevantJobIds.has(jobId))) continue;
+    const soleJob = jobIds.size === 1 ? jobIds.values().next().value : undefined;
+    for (const message of await conversationMessages(conversationId)) {
+      const jobId = message.jobId ? key(account, 'job:' + message.jobId) : soleJob;
+      if (!jobId || !jobIds.has(jobId) || !relevantJobIds.has(jobId) || !isHuman(message)) continue;
+      const text = typeof message.text === 'string' ? message.text.trim() : '';
+      if (!text) continue;
+      const time = earliest(message.time);
+      const messageId = String(message.messageId || message.id);
+      const previous = latest.get(jobId);
+      if (previous && (time < previous.time || (time === previous.time && messageIdOrder.compare(messageId, previous.messageId) <= 0))) continue;
+      const direction = message.direction === 'in' || message.direction === 'out' ? message.direction : 'unknown';
+      latest.set(jobId, {text, direction, time, messageId});
+    }
+  }
+  return new Map([...latest].map(([jobId, {text, direction}]) => [jobId, {text, direction}]));
+}
+async function data(account: string,includeHidden=false){const accounts=await meta('accounts',[]);const result: ExternalRecord={account,accounts,settings:{},sync:await syncTask(account)};for(const s of stores.filter(s=>s!=='meta'&&s!=='messages'))result[s]=(await op(s,'getAll')).filter(x=>x.account===account);result.jobs=result.jobs.filter((job: ExternalRecord)=>!job.deleted);if(!includeHidden)result.jobs=visibleJobs(result.jobs,result.conversations);const referenced=new Set([...result.jobs,...result.conversations].map((x: ExternalRecord)=>x.companyId).filter(Boolean));result.companies=result.companies.filter((x: ExternalRecord)=>referenced.has(x.id)||typeof x.note==='string'&&x.note.length>0);return result;}
+async function bossTab(account: string){const tabs=await chrome.tabs.query({url:SITE_ORIGINS.map(origin=>origin+'/web/geek/chat*')});const group=await accountSource(account);for(const tab of tabs){if(!tabAccounts.has(tab.id)&&sourceGroup(tab.url)===group){try{const r=await chrome.tabs.sendMessage(tab.id!,{type:'ACCOUNT_INFO'});if(r?.account===account)tabAccounts.set(tab.id,r.account);}catch{}}}const matching=tabs.filter(t=>tabAccounts.get(t.id)===account&&(!t.url||sourceGroup(t.url)===group));if(!matching.length)throw new Error('没有与该账号匹配的 BOSS 聊天页，请打开并刷新页面');return matching.find(t=>t.active)||matching[matching.length-1];}
+chrome.action.onClicked.addListener(tab=>chrome.tabs.create({url:chrome.runtime.getURL('dist/dashboard.html'),...(Number.isInteger(tab?.windowId)?{windowId:tab.windowId}:{})}));
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
-  const fromSite=!!sender.tab&&(()=>{const origin=siteOrigin(sender.url);if(!origin)return false;try{const path=new URL(sender.url).pathname;return path.startsWith('/web/')||path.startsWith('/job_detail/');}catch{return false;}})();
+  const fromSite=!!sender.tab&&(()=>{const origin=siteOrigin(sender.url);if(!origin)return false;try{const path=new URL(sender.url || '').pathname;return path.startsWith('/web/')||path.startsWith('/job_detail/');}catch{return false;}})();
   const fromUI=sender.url?.startsWith(chrome.runtime.getURL(''));
   (async()=>{
     if(message.type==='INGEST'&&fromSite){return serialize(async()=>{
@@ -310,22 +351,28 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
       if(d.type==='CONVERSATION'&&d.history&&(d.history.runId||d.history.continuousFromStart||d.history.serverReportsEnd||d.history.pages)){
         if(!task||!d.requestId||d.history.runId!==d.runId||!Number.isInteger(d.history.pages)||d.history.pages<1)throw new Error('缺少本次同步保存凭据');
       }
-      await registerAccount(d.account,sourceGroup(sender.url));
+      await registerAccount(d.account,sourceGroup(sender.url)!);
       await migrateInterviews(d.account);
       await ensureConversationOrder(d.account);
-      tabAccounts.set(sender.tab.id,d.account);
-      await setMeta('tab-binding:'+sender.tab.id,{account:d.account,group:sourceGroup(sender.url)});
-      if(d.type==='FAVORITES'){await ingestFavorites(d.account,d.rows,siteOrigin(sender.url));return {ok:true,count:d.rows.length};}
+      tabAccounts.set(sender.tab!.id,d.account);
+      await setMeta('tab-binding:'+sender.tab!.id,{account:d.account,group:sourceGroup(sender.url)});
+      if(d.type==='FAVORITES'){await ingestFavorites(d.account,d.rows,siteOrigin(sender.url)!);return {ok:true,count:d.rows.length};}
       if(d.type==='PAGE_CONTEXT'){
-        if(typeof d.favorite==='boolean')await ingestFavorites(d.account,[d],siteOrigin(sender.url));
-        const job=await op('jobs','get',key(d.account,'job:'+d.jobId));
+        if(typeof d.favorite==='boolean')await ingestFavorites(d.account,[d],siteOrigin(sender.url)!);
+        let job=await op('jobs','get',key(d.account,'job:'+d.jobId));
+        const pageJobId=new URL(sender.url!).pathname.match(/^\/job_detail\/([a-zA-Z0-9_-]{1,150})\.html$/)?.[1];
+        const title=typeof d.title==='string'&&d.title.length<=200?d.title.trim():'';
+        if(job&&job.account===d.account&&!job.deleted&&pageJobId&&pageJobId===d.jobId&&title&&title!=='待识别 JD'&&(!job.title?.trim()||job.title==='待识别 JD')){
+          job={...job,title,detailTitle:true,updatedAt:Date.now()};
+          await op('jobs','put',job);
+        }
         const companies=(await op('companies','getAll')).filter(c=>c.account===d.account&&c.name===d.companyName);
         const jobs=(await op('jobs','getAll')).filter(j=>j.account===d.account&&companies.some(c=>c.id===j.companyId));
         return {ok:true,summary:job?{companyName:d.companyName,jobTitle:job.title,status:job.status,manual:job.manual}:{companyName:d.companyName||'公司待识别',jobTitle:d.title,status:'unknown',manual:false},companyJobCount:jobs.length};
       }
-      if(d.type==='SNAPSHOT'){const summary=await ingestBatch(d.account,d.rows.map(row=>({row})),d.selectedId,siteOrigin(sender.url));return {ok:true,summary,count:d.rows.length};}
+      if(d.type==='SNAPSHOT'){const summary=await ingestBatch(d.account,d.rows.map((row: ExternalRecord)=>({row})),d.selectedId,siteOrigin(sender.url)!);return {ok:true,summary,count:d.rows.length};}
       if(d.type==='CONVERSATION'){
-        const summary=await ingestBatch(d.account,[{row:d.row,detail:d.detail||{},messages:d.messages||[],history:d.history}],d.row.id,siteOrigin(sender.url));
+        const summary=await ingestBatch(d.account,[{row:d.row,detail:d.detail||{},messages:d.messages||[],history:d.history}],d.row.id,siteOrigin(sender.url)!);
         if(task)await setMeta(key(d.account,'sync'),{...task,updatedAt:Date.now()});
         return {ok:true,summary};
       }
@@ -337,7 +384,7 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
     });}
     if(message.type==='WIDGET_GET'&&fromSite)return serialize(async()=>{
       if(typeof message.account!=='string'||!message.account)throw new Error('请选择账号');
-      for(const [field,max] of [['jobId',200],['companyName',180],['title',6000]])if(message[field]!=null&&(typeof message[field]!=='string'||message[field].length>max))throw new Error('无效职位字段');
+      for(const [field,max] of [['jobId',200],['companyName',180],['title',6000]] as const)if(message[field]!=null&&(typeof message[field]!=='string'||message[field].length>max))throw new Error('无效职位字段');
       await requireSiteAccount(message.account,sender);
       const account=message.account,candidate=message.jobId?key(account,'job:'+message.jobId):null,jobId=validJobId(account,candidate)?candidate:null;
       await ensureStatusSchema(account);
@@ -348,15 +395,20 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
       const companyId=found?.companyId||(message.companyName?.normalize('NFKC').trim()?companyKey(account,message.companyName):null);
       const company=companyId?await op('companies','get',companyId):null;
       const related=companyId?visible.filter(j=>j.companyId===companyId):[];
+      const latestMessages = await latestJobMessages(account, related, allJobs, conversations);
       let current=job?.id||null;
       if(!jobId&&message.title){const matches=related.filter(j=>j.title===message.title);if(matches.length===1)current=matches[0].id;}
-      const jobs=related.map(j=>({id:j.id,title:j.title,url:j.url||'',updatedAt:j.updatedAt,favorite:j.favorite===true,status:j.status||'unknown',label:j.autoLabel||'',manual:!!j.manual,current:j.id===current,note:j.note??'',persisted:true,firstConversationAt:earliest(j.firstConversationAt),...(Array.isArray(j.noteConflicts)&&j.noteConflicts.length?{noteConflicts:j.noteConflicts.filter(n=>typeof n?.text==='string').map(n=>({text:n.text}))}:{})}));
+      const jobs: ExternalRecord[]=related.map(j=>({id:j.id,title:j.title,url:j.url||'',updatedAt:j.updatedAt,favorite:j.favorite===true,status:j.status||'unknown',label:j.autoLabel||'',manual:!!j.manual,current:j.id===current,note:j.note??'',persisted:true,firstConversationAt:earliest(j.firstConversationAt),...(Array.isArray(j.noteConflicts)&&j.noteConflicts.length?{noteConflicts:j.noteConflicts.filter((n: ExternalRecord)=>typeof n?.text==='string').map((n: ExternalRecord)=>({text:n.text}))}:{})}));
+      for (const job of jobs) {
+        const preview = latestMessages.get(job.id);
+        if (preview) job.latestMessage = preview;
+      }
       if(!current&&message.title&&!message.preview&&!found){current=jobId;jobs.push({id:jobId,title:message.title,status:'unknown',manual:false,current:true,note:'',persisted:false,firstConversationAt:0});}
       jobs.sort((a,b)=>{const timeA=a.firstConversationAt||Infinity,timeB=b.firstConversationAt||Infinity;if(timeA!==timeB)return timeA<timeB?-1:1;if(a.id==null)return b.id==null?0:1;if(b.id==null)return -1;return a.id<b.id?-1:a.id>b.id?1:0;});
-      return {ok:true,data:{companyId,companyName:company?.account===account?company.name:(message.companyName||''),companyNote:company?.account===account?(company.note??''):'',settings:{},jobs,currentJobId:current}};
+      return {ok:true,data:{companyId,companyName:company?.account===account?company!.name:(message.companyName||''),companyNote:company?.account===account?(company!.note??''):'',settings:{},jobs,currentJobId:current}};
     });
-    if(message.type==='DB_GET'&&(fromUI||fromSite))return serialize(async()=>{const account=fromSite?(message.account===undefined?tabAccounts.get(sender.tab.id):message.account):(message.account===undefined?await currentAccount():await resolveAccount(message.account));if(fromSite)await requireSiteAccount(account,sender);await ensureStatusSchema(account);return {ok:true,data:await data(account)};});
-    if(message.type==='OPEN_DASHBOARD'&&fromSite){const account=message.account===undefined?tabAccounts.get(sender.tab.id):message.account;if(typeof account!=='string'||!account)throw new Error('页面账号尚未识别，请稍后重试');await serialize(()=>requireSiteAccount(account,sender));const tab=await chrome.tabs.create({url:chrome.runtime.getURL('dashboard.html')+'?account='+encodeURIComponent(account),...(Number.isInteger(sender.tab.windowId)?{windowId:sender.tab.windowId}:{})});return {ok:true,tabId:tab?.id};}
+    if(message.type==='DB_GET'&&(fromUI||fromSite))return serialize(async()=>{const account=fromSite?(message.account===undefined?tabAccounts.get(sender.tab!.id):message.account):(message.account===undefined?await currentAccount():await resolveAccount(message.account));if(fromSite)await requireSiteAccount(account,sender);await ensureStatusSchema(account);return {ok:true,data:await data(account)};});
+    if(message.type==='OPEN_DASHBOARD'&&fromSite){const account=message.account===undefined?tabAccounts.get(sender.tab!.id):message.account;if(typeof account!=='string'||!account)throw new Error('页面账号尚未识别，请稍后重试');await serialize(()=>requireSiteAccount(account,sender));const tab=await chrome.tabs.create({url:chrome.runtime.getURL('dist/dashboard.html')+'?account='+encodeURIComponent(account),...(Number.isInteger(sender.tab!.windowId)?{windowId:sender.tab!.windowId}:{})});return {ok:true,tabId:tab?.id};}
     if(message.type==='SAVE_JOB'&&(fromUI||fromSite))return serialize(async()=>{if(fromSite)await requireSiteAccount(message.account,sender);return saveJob(message,fromSite?siteOrigin(sender.url):null);});
     if(message.type==='SAVE_COMPANY_NOTE'&&(fromUI||fromSite))return serialize(async()=>{
       if(typeof message.account!=='string'||!message.account)throw new Error('请选择账号');
@@ -380,7 +432,7 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
       const token=message.jobId.slice(key(account,'job:').length);
       const conversations=(await op('conversations','getAll')).filter(c=>c.account===account&&c.jobId===token);
       const events=(await op('events','getAll')).filter(event=>event.account===account&&event.jobId===message.jobId);
-      const changes=[['jobs','put',{id:message.jobId,account,deleted:true,autoSchemaVersion:STATUS_SCHEMA,deletedAt:Date.now()}],...conversations.map(conversation=>['conversations','put',{...conversation,jobId:'',jobTitle:''}]),...events.map(event=>['events','delete',event.id])];
+      const changes: Change[]=[['jobs','put',{id:message.jobId,account,deleted:true,autoSchemaVersion:STATUS_SCHEMA,deletedAt:Date.now()}],...conversations.map((conversation): Change=>['conversations','put',{...conversation,jobId:'',jobTitle:''}]),...events.map((event): Change=>['events','delete',event.id])];
       await commit(changes);
       chrome.runtime.sendMessage?.({type:'FAVORITES_CHANGED',account})?.catch(()=>{});
       return {ok:true};
@@ -414,7 +466,7 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
         const response=await chrome.tabs.sendMessage(task.tabId,{type:message.type,account,runId:task.runId});
         if(!response?.ok)throw new Error(response?.error||'网页未响应，请刷新 BOSS 聊天页');
         return {...response,runId:task.runId};
-      }catch(error){
+      }catch(error: any){
         await serialize(async()=>{
           const current=await meta(key(account,'sync'),{});
           if(current.runId===task.runId&&current.running)await setMeta(key(account,'sync'),{...current,running:false,complete:false,interrupted:true,message:String(error.message).slice(0,250),updatedAt:Date.now()});

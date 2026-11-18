@@ -6,7 +6,7 @@ const root = new URL('../', import.meta.url);
 let checked = 0;
 for (const directory of ['extension', 'mock', 'tests', 'scripts', 'research']) {
   const files = await readdir(new URL(directory + '/', root), {recursive: true});
-  for (const file of files.filter(file => file.endsWith('.js')).sort()) {
+  for (const file of files.filter(file => file.endsWith('.js') && !file.startsWith('dist/')).sort()) {
     const filename = fileURLToPath(new URL(directory + '/' + file, root));
     const result = spawnSync(process.execPath, ['--check', filename], {stdio: 'inherit'});
     if (result.error) throw result.error;

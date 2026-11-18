@@ -1,4 +1,9 @@
-export const SCENARIOS = {
+import type {MockUser, MockRow, MockMessage} from './src/types.ts';
+
+interface MockConversation {key: string; row: MockRow; messages: MockMessage[]; detail: {data: {encryptJobId: string; companyName: string; bothTalked: boolean}; job: {jobName: string; brandName: string; salaryDesc: string; locationName: string; experienceName: string; degreeName: string}}}
+export interface MockWorld {scenario: string; account: string; user: MockUser; conversations: MockConversation[]; favoriteJobIds: string[]; nextId: number; requests: {path: string; bossId: string | null; cursor: string | null; page: string | null; at: number; status: number}[]; deletionProbe?: string}
+
+export const SCENARIOS: Record<string, string> = {
   normal: '日常沟通 · 状态与排序覆盖',
   unknown_direction: '消息方向缺失 · 列表回退或待确认',
   ambiguous_resume: '简历提示冲突 · 同时 / 无时间',
@@ -16,13 +21,13 @@ export const SCENARIOS = {
   slow: '慢接口 · 16 秒'
 };
 
-export const ACCOUNTS = {
+export const ACCOUNTS: Record<string, MockUser> = {
   alpha: {userId: 'mock-geek-alpha', name: '林同学', label: '账号 A · 林同学'},
   beta: {userId: 'mock-geek-beta', name: '陈同学', label: '账号 B · 陈同学'}
 };
 
 // Keep these ranges stable when adding/reordering the scenario catalog: plugin history survives resets.
-const MESSAGE_OFFSETS = {
+const MESSAGE_OFFSETS: Record<string, number> = {
   normal: 0, unknown_direction: 1000000, ambiguous_resume: 2000000,
   multipage: 3000000, empty: 4000000, partial: 5000000, stalled: 6000000,
   rate_limit: 7000000, unauthorized: 8000000, forbidden: 9000000,
@@ -30,7 +35,7 @@ const MESSAGE_OFFSETS = {
   business_error: 13000000, slow: 14000000
 };
 const BASE_TIME = Date.UTC(2026, 10, 16, 2);
-const CONTACTS = [
+const CONTACTS: [string, string, string, string, string, number | null, string, boolean | null, number | null][] = [
   ['request', '林沐', '星河科技', '前端工程师', 'frontend', 2, '你好，可以发一份简历吗？', false, 2],
   ['awaiting_boss', '周然', '星河科技', '全栈工程师', 'fullstack', 0, '你好，想了解一下这个岗位。', true, 1],
   ['viewed', '何悦', '云帆数据', '数据平台工程师', 'data', 0, '对方已查看了您的附件简历', false, 2],
@@ -51,14 +56,14 @@ const CONTACTS = [
 
 const SYSTEM_KEYS = new Set(['viewed', 'sent', 'unknown_resume', 'system_only', 'applied', 'resume_failed', 'resume_rejected']);
 
-export function createWorld({scenario = 'normal', account = 'alpha'} = {}) {
+export function createWorld({scenario = 'normal', account = 'alpha'} = {}): MockWorld {
   if (!Object.hasOwn(SCENARIOS, scenario) || !Object.hasOwn(ACCOUNTS, account)) throw new Error('未知场景或账号');
   const user = {...ACCOUNTS[account]};
   const messageOffset = MESSAGE_OFFSETS[scenario];
   const shortHistory = ['normal', 'partial', 'unknown_direction', 'ambiguous_resume'].includes(scenario);
   const conversations = (scenario === 'empty' ? [] : CONTACTS).map((entry, index) => {
     const [key, name, company, title, job, unreadCount, lastText, lastIsSelf, lastMsgStatus] = entry;
-    const row = {
+    const row: MockRow = {
       encryptBossId: account + '-' + scenario + '-boss-' + (index + 1), securityId: 'synthetic-local-only',
       encryptJobId: job ? account + '-' + scenario + '-job-' + job : '', name,
       brandName: company, jobName: title, unreadCount, lastText, lastIsSelf, lastMsgStatus
@@ -66,7 +71,7 @@ export function createWorld({scenario = 'normal', account = 'alpha'} = {}) {
     // Separate contact start times make each populated JD's earliest message sortable.
     const startTime = BASE_TIME + index * 3600000;
     const count = shortHistory && key === 'no_messages' ? 0 : shortHistory ? 4 : 45;
-    const messages = Array.from({length: count}, (_, messageIndex) => {
+    const messages: MockMessage[] = Array.from({length: count}, (_, messageIndex) => {
       const outgoing = messageIndex === count - 1 ? lastIsSelf === true : messageIndex % 2 === 1;
       const last = messageIndex === count - 1;
       const body = {type: last && SYSTEM_KEYS.has(key) ? 4 : 1,
@@ -79,11 +84,11 @@ export function createWorld({scenario = 'normal', account = 'alpha'} = {}) {
       if (key === 'earlier_resume') messages[1].body = {type: 4, text: '您的附件简历已发送给Boss'};
       if (key === 'system_only') for (const message of messages) message.body = {type: 4, text: '您已与对方建立沟通'};
       // Leave body.text empty to exercise both HTTP and page dialog extraction.
-      if (key === 'dialog_request') messages.at(-1).body = {type: 7, text: '', dialog: {content: '希望获取您的附件简历'}};
+      if (key === 'dialog_request') messages.at(-1)!.body = {type: 7, text: '', dialog: {content: '希望获取您的附件简历'}};
       if (key === 'withdrawn') {
         messages[2].body.text = '我已经补充了项目介绍，期待回复。';
-        messages[2].from.uid = user.userId;
-        messages[2].to.uid = row.encryptBossId;
+        messages[2].from!.uid = user.userId;
+        messages[2].to!.uid = row.encryptBossId;
       }
     }
     Object.assign(row, {lastTS: messages.at(-1)?.time ?? 0, updateTime: messages.at(-1)?.time ?? startTime});
@@ -94,7 +99,7 @@ export function createWorld({scenario = 'normal', account = 'alpha'} = {}) {
   });
   if (scenario === 'unknown_direction') {
     // Include both wholly missing endpoints and present but unidentifiable endpoints.
-    for (const [index, direction] of [[0, true], [1, false], [2, null]]) {
+    for (const [index, direction] of [[0, true], [1, false], [2, null]] as const) {
       const conversation = conversations[index];
       // Dedicated identities keep both peer contributions and previously collected fixtures out of these demos.
       conversation.row.encryptBossId += '-direction';
@@ -107,12 +112,12 @@ export function createWorld({scenario = 'normal', account = 'alpha'} = {}) {
         message.body = {type: 1, text: '方向缺失的普通沟通 ' + (offset + 1)};
       }
       Object.assign(conversation.row, {lastText: '方向缺失的普通沟通 4', lastIsSelf: direction,
-        lastTS: conversation.messages.at(-1).time, updateTime: conversation.messages.at(-1).time});
+        lastTS: conversation.messages.at(-1)!.time, updateTime: conversation.messages.at(-1)!.time});
     }
   }
   if (scenario === 'ambiguous_resume') {
     const labels = ['您的附件简历已发送给Boss', '对方已查看了您的附件简历'];
-    for (const [index, mode] of [[0, 'same'], [1, 'missing'], [2, 'single']]) {
+    for (const [index, mode] of [[0, 'same'], [1, 'missing'], [2, 'single']] as const) {
       const conversation = conversations[index];
       conversation.messages = conversation.messages.slice(0, mode === 'single' ? 1 : 2);
       conversation.messages.forEach((message, offset) => {
@@ -120,19 +125,19 @@ export function createWorld({scenario = 'normal', account = 'alpha'} = {}) {
         if (mode === 'same') message.time = BASE_TIME;
         else delete message.time;
       });
-      Object.assign(conversation.row, {lastText: conversation.messages.at(-1).body.text, lastTS: mode === 'same' ? BASE_TIME : 0});
+      Object.assign(conversation.row, {lastText: conversation.messages.at(-1)!.body.text, lastTS: mode === 'same' ? BASE_TIME : 0});
     }
   }
   const prefix=account+'-'+scenario;
-  const favoriteJobIds=scenario==='empty'?[]:[conversations.find(item=>item.row.encryptJobId)?.row.encryptJobId,prefix+'-favorite-only',prefix+'-favorite-closed'].filter(Boolean);
+  const favoriteJobIds=scenario==='empty'?[]:[conversations.find(item=>item.row.encryptJobId)?.row.encryptJobId,prefix+'-favorite-only',prefix+'-favorite-closed'].filter((value): value is string => Boolean(value));
   return {scenario, account, user, conversations, favoriteJobIds, nextId: messageOffset + 900000, requests: []};
 }
 
-export function listRows(world, limit = Infinity) {
+export function listRows(world: MockWorld, limit = Infinity) {
   return world.conversations.slice(0, limit).map(({row}) => structuredClone(row));
 }
 
-export function jobPageFixtures(world) {
+export function jobPageFixtures(world: MockWorld) {
   const records = new Map(listRows(world).filter(row => row.encryptJobId).map(row => [row.encryptJobId, row]));
   const first = records.values().next().value;
   const prefix = world.account + '-' + world.scenario;
@@ -144,7 +149,7 @@ export function jobPageFixtures(world) {
   ];
   const favoriteRows=world.scenario==='empty'?[]:[{encryptJobId:prefix+'-favorite-only',jobName:'收藏的全栈工程师',brandName:company},{encryptJobId:prefix+'-favorite-closed',jobName:'已下架的收藏职位',brandName:'收藏示例公司',closed:true}];
   const deleteRows=world.deletionProbe&&world.scenario!=='empty'?[{encryptJobId:prefix+'-delete-card-'+world.deletionProbe,jobName:'卡片删除演示职位',brandName:'删除演示公司'}]:[];
-  const rows = [...records.values(), ...favoriteRows, ...previews, ...deleteRows].map(row => ({encryptJobId: row.encryptJobId, jobName: row.jobName,closed:!!row.closed,
+  const rows = [...records.values(), ...favoriteRows, ...previews, ...deleteRows].map(row => ({encryptJobId: row.encryptJobId, jobName: row.jobName,closed:'closed' in row && !!row.closed,
     brandName: row.brandName, encryptBrandId: prefix + '-brand-' + encodeURIComponent(row.brandName),
     salaryDesc: '20-40K', jobExperience: '3-5年', jobDegree: '本科'}));
   const details = Object.fromEntries(rows.map(row => [row.encryptJobId, {
@@ -160,7 +165,7 @@ export function jobPageFixtures(world) {
       unknownCompany: previews[1].encryptJobId, sameTitleDifferentId: previews[2].encryptJobId,deleteByCard:deleteRows[0]?.encryptJobId||null}};
 }
 
-export function historyPage(conversation, {cursor = '0', count = 20, stalled = false} = {}) {
+export function historyPage(conversation: MockConversation, {cursor = '0', count = 20, stalled = false} = {}) {
   const newest = [...conversation.messages].sort((first, second) => Number(second.mid) - Number(first.mid));
   const start = cursor === '0' ? 0 : newest.findIndex(message => message.mid === String(cursor)) + 1;
   if (cursor !== '0' && start === 0) throw new Error('无效历史游标');
@@ -169,7 +174,7 @@ export function historyPage(conversation, {cursor = '0', count = 20, stalled = f
     minMsgId: stalled && cursor !== '0' ? String(cursor) : messages.at(-1)?.mid ?? '0'};
 }
 
-export function switchJob(world, bossId) {
+export function switchJob(world: MockWorld, bossId: string) {
   const conversation = world.conversations.find(item => item.row.encryptBossId === bossId);
   if (!conversation) throw new Error('联系人不存在');
   const target = world.conversations.find(item => item.row.brandName === conversation.row.brandName && item.row.encryptJobId && item.row.encryptJobId !== conversation.row.encryptJobId);
@@ -180,11 +185,11 @@ export function switchJob(world, bossId) {
   return structuredClone(conversation.row);
 }
 
-export function appendMessage(world, bossId, {kind = 'text', text = ''} = {}) {
+export function appendMessage(world: MockWorld, bossId: string, {kind = 'text', text = ''} = {}) {
   const conversation = world.conversations.find(item => item.row.encryptBossId === bossId);
   if (!conversation) throw new Error('联系人不存在');
   const outgoing = !['request_resume', 'view_resume', 'withdraw', 'unknown_resume', 'resume_failed'].includes(kind);
-  const templates = {resume: '您的附件简历已发送给Boss', apply_resume: '附件简历请求已发送', request_resume: '希望获取您的附件简历', view_resume: '对方已查看了您的附件简历', withdraw: '对方撤回了一条消息', unknown_resume: '对方正在审核您的附件简历', resume_failed: '简历发送失败\n对方已拒绝您的简历'};
+  const templates: Record<string, string> = {resume: '您的附件简历已发送给Boss', apply_resume: '附件简历请求已发送', request_resume: '希望获取您的附件简历', view_resume: '对方已查看了您的附件简历', withdraw: '对方撤回了一条消息', unknown_resume: '对方正在审核您的附件简历', resume_failed: '简历发送失败\n对方已拒绝您的简历'};
   if (kind !== 'text' && !Object.hasOwn(templates, kind)) throw new Error('未知消息类型');
   const content = kind === 'text' ? String(text).trim().slice(0, 2000) : templates[kind];
   if (!content) throw new Error('消息不能为空');

@@ -1,45 +1,112 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import vm from 'node:vm';
-import {webcrypto} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
+import {browserHarness} from './support/dom.js';
 
-const source=await readFile(new URL('../../extension/content.js',import.meta.url),'utf8');
-function harness(sendMessage){
-  let listener;const output=[];
-  const window={postMessage:event=>output.push(event.data),addEventListener:(name,fn)=>{listener=fn;}};
-  const document={body:null,addEventListener(){}};
-  const chrome={runtime:{sendMessage,onMessage:{addListener(){}}}};
-  vm.runInNewContext(source,{window,document,chrome,location:{origin:'https://www.zhipin.com'},crypto:webcrypto,setTimeout,clearTimeout});
-  return {deliver:data=>listener({source:window,origin:'https://www.zhipin.com',data:{channel:'boss-local-helper-v1',direction:'to-extension',data}}),output};
-}
-function visualHarness(sendMessage,{confirm=()=>true}={}){
-  class Element {
-    constructor(tag){this.tagName=tag;this.children=[];this.className='';this.attributes={};this.isConnected=false;this.value='';this.handlers={};}
-    set textContent(value){this.text=String(value);this.children=[];}
-    get textContent(){return (this.text||'')+this.children.map(e=>e.textContent).join('');}
-    append(...items){for(const item of items){if(item.tagName==='fragment')this.children.push(...item.children);else this.children.push(item);item.isConnected=true;}}
-    replaceChildren(...items){this.children=[];this.text='';this.append(...items);}
-    setAttribute(name,value){this.attributes[name]=value;}
-    addEventListener(name,fn){(this.handlers[name]??=[]).push(fn);}
-    async emit(name){for(const fn of this.handlers[name]||[])await fn({preventDefault(){}});}
-    get classList(){return{add:name=>{this.className+=' '+name;}};}
-  }
-  let listener,tick;const documentListeners={};
-  const body=new Element('body');
-  const document={body,hidden:false,createElement:tag=>new Element(tag),createDocumentFragment:()=>new Element('fragment'),addEventListener:(name,handler)=>{documentListeners[name]=handler;}};
-  const window={postMessage(){},confirm,addEventListener:(name,fn)=>{listener=fn;}};
-  const chrome={runtime:{sendMessage,onMessage:{addListener(){}}}};
-  vm.runInNewContext(source,{window,document,chrome,location:{origin:'https://www.zhipin.com'},crypto:webcrypto,URL,setTimeout,clearTimeout,setInterval:fn=>{tick=fn;return 1;}});
-  return {widget:()=>body.children[0],tick:()=>tick?.(),visibility:hidden=>{document.hidden=hidden;documentListeners.visibilitychange?.();},deliver:data=>listener({source:window,origin:'https://www.zhipin.com',data:{channel:'boss-local-helper-v1',direction:'to-extension',data}})};
-}
-const find=(root,cls)=>root?.className.split(' ').includes(cls)?root:root?.children.map(c=>find(c,cls)).find(Boolean);
-const all=(root,cls)=>[...(root?.className.split(' ').includes(cls)?[root]:[]),...(root?.children||[]).flatMap(c=>all(c,cls))];
-const currentStatus=h=>find(all(h.widget(),'bh-job').find(r=>r.attributes['aria-current']==='true'),'bh-job-status');
+const source=await readFile(new URL('../../extension/dist/content.js',import.meta.url),'utf8');
+const harness=sendMessage=>browserHarness(source,sendMessage);
+const visualHarness=(sendMessage,options)=>browserHarness(source,sendMessage,options);
+const find=(root,cls)=>root?.classList.contains(cls)?root:root?.querySelector('.'+cls)||undefined;
+const all=(root,cls)=>[...(root?.classList.contains(cls)?[root]:[]),...(root?.querySelectorAll('.'+cls)||[])];
+const currentStatus=h=>find(all(h.widget(),'bh-job').find(row=>row.getAttribute('aria-current')==='true'),'bh-job-status');
 const rowTitles=h=>all(h.widget(),'bh-job').map(row=>find(row,'bh-job-title').textContent);
 const snapshot=(account='a',jobId='j1')=>({type:'SNAPSHOT',account,selectedId:'c1',rows:[{id:'c1',jobId,companyName:'示例公司',jobTitle:jobId==='j1'?'前端':'后端'}]});
 // The server returns the older JD first, while the current JD is the second row.
 const data=()=>({companyId:'company-a',companyName:'示例公司',companyNote:'公司原备注',settings:{},jobs:[{id:'j2',title:'后端',persisted:true,updatedAt:20,firstConversationAt:10,status:'awaiting_self',note:''},{id:'j1',title:'前端',persisted:true,updatedAt:30,firstConversationAt:20,status:'resume_event',label:'附件简历请求已发送',manual:false,current:true,note:'职位原备注'}]});
+
+test('浮窗收起时隐藏内容，重新展开保留备注草稿，切换职位也保持收起状态',async()=>{
+  const h=visualHarness(async message=>message.type==='INGEST'?{ok:true}:{ok:true,data:data()});
+  await h.deliver(snapshot());
+  const toggle=find(h.widget(),'bh-widget-toggle');
+  const body=h.document.getElementById(toggle.getAttribute('aria-controls'));
+  const company=find(h.widget(),'bh-company-line');
+  assert.equal(toggle.getAttribute('aria-expanded'),'true');
+  assert.equal(body.hidden,false);
+
+  await currentStatus(h).emit('click');
+  const input=find(h.widget(),'bh-note-input');
+  input.value='未保存的备注';
+  await input.emit('input');
+  await toggle.emit('click');
+  assert.equal(toggle.getAttribute('aria-expanded'),'false');
+  assert.equal(toggle.textContent,'展开浮窗');
+  assert.equal(body.hidden,true);
+  assert.equal(company.hidden,true);
+
+  await toggle.emit('click');
+  assert.equal(toggle.getAttribute('aria-expanded'),'true');
+  assert.equal(body.hidden,false);
+  assert.equal(company.hidden,false);
+  assert.equal(find(h.widget(),'bh-note-input').value,'未保存的备注');
+
+  await toggle.emit('click');
+  await h.deliver(snapshot('a','j2'));
+  assert.equal(toggle.getAttribute('aria-expanded'),'false');
+  assert.equal(body.hidden,true);
+});
+
+test('拖动浮窗后保存位置，新页面恢复，窗口缩小时保持可见', async () => {
+  const stored = {};
+  let saves = 0;
+  const storage = {local: {
+    get: async key => ({[key]: stored[key]}),
+    set: async values => {Object.assign(stored, values); saves++;},
+  }};
+  async function openPage(url) {
+    const h = visualHarness(async () => ({ok: true, data: data()}), {storage, url});
+    const resize = (width, height) => {
+      Object.defineProperties(h.document.documentElement, {clientWidth: {configurable: true, value: width}, clientHeight: {configurable: true, value: height}});
+      h.window.dispatchEvent(new h.window.Event('resize'));
+    };
+    resize(900, 700);
+    h.widget().getBoundingClientRect = () => ({left: 522, top: 482, width: 360, height: 200});
+    await h.deliver(snapshot());
+    return {h, resize};
+  }
+  const {h} = await openPage();
+  const grip = find(h.widget(), 'bh-widget-drag');
+  grip.setPointerCapture = () => {};
+  const pointer = (type, clientX, clientY) => grip.dispatchEvent(new h.window.PointerEvent(type, {pointerId: 1, isPrimary: true, clientX, clientY, button: 0}));
+
+  pointer('pointerdown', 544, 505);
+  pointer('pointermove', 244, 305);
+  assert.equal(h.widget().style.left, '222px');
+  assert.equal(h.widget().style.top, '282px');
+  assert.equal(saves, 0);
+  pointer('pointerup', 244, 305);
+  assert.equal(saves, 1);
+
+  const {h: refreshed, resize} = await openPage();
+  assert.equal(refreshed.widget().style.left, '222px');
+  assert.equal(refreshed.widget().style.top, '282px');
+  resize(500, 400);
+  assert.equal(refreshed.widget().style.left, '140px');
+  assert.equal(refreshed.widget().style.top, '200px');
+  resize(900, 700);
+  assert.equal(refreshed.widget().style.left, '222px');
+  assert.equal(refreshed.widget().style.top, '282px');
+  assert.equal(saves, 1);
+
+  const {h: mock} = await openPage('http://127.0.0.1:4173/web/geek/chat');
+  assert.equal(mock.widget().style.left, '');
+  assert.equal(mock.widget().style.top, '');
+});
+
+test('浮窗按发送方显示人工消息预览并保留完整的纯文本', async () => {
+  const details = data();
+  const longMessage = '这是较长的消息'.repeat(40) + '\n<img src=x onerror="window.executed=true">';
+  details.jobs[0].latestMessage = {text:longMessage,direction:'out'};
+  details.jobs[1].latestMessage = {text:'可以约下周沟通',direction:'in'};
+  const h = visualHarness(async message => message.type==='INGEST' ? {ok:true} : {ok:true,data:details});
+  await h.deliver(snapshot());
+  const [outgoing, incoming] = all(h.widget(),'bh-message-preview');
+  assert.ok(outgoing.classList.contains('bh-message-out'));
+  assert.ok(incoming.classList.contains('bh-message-in'));
+  assert.equal(find(outgoing,'bh-message-sender').textContent,'我');
+  assert.equal(find(incoming,'bh-message-sender').textContent,'Boss');
+  assert.equal(find(outgoing,'bh-message-text').textContent,longMessage);
+  assert.equal(outgoing.querySelector('img'), null);
+});
 
 test('浮窗可手动选择拒绝沟通，保存后展示手动标识并可恢复自动',async()=>{
   const sent=[],d=data();
@@ -51,7 +118,7 @@ test('浮窗可手动选择拒绝沟通，保存后展示手动标识并可恢�
   });
   await h.deliver(snapshot());await currentStatus(h).emit('click');
   let select=find(h.widget(),'bh-status-select');
-  assert.equal(select.children.find(option=>option.value==='communication_rejected').textContent,'对方拒绝沟通');
+  assert.equal([...select.children].find(option=>option.value==='communication_rejected').textContent,'对方拒绝沟通');
   select.value='communication_rejected';await select.emit('change');await find(h.widget(),'bh-editor').emit('submit');
   assert.equal(sent.find(message=>message.type==='SAVE_JOB').status,'communication_rejected');
   assert.equal(currentStatus(h).textContent,'对方拒绝沟通（手动）');
@@ -65,7 +132,7 @@ test('职位页的JD卡片可直接删除，取消确认不写入，成功后刷
   const sent=[],d=data();let approved=false;
   const h=visualHarness(async message=>{sent.push(message);if(message.type==='INGEST')return{ok:true};if(message.type==='DELETE_JOB'){d.jobs=d.jobs.filter(job=>job.id!==message.jobId);return{ok:true};}return{ok:true,data:d};},{confirm:()=>approved});
   await h.deliver({type:'PAGE_CONTEXT',account:'a',jobId:'j1',companyName:'示例公司',title:'前端'});
-  let remove=find(all(h.widget(),'bh-job').find(row=>row.attributes['aria-current']==='true'),'bh-job-delete');
+  let remove=find(all(h.widget(),'bh-job').find(row=>row.getAttribute('aria-current')==='true'),'bh-job-delete');
   assert.equal(remove.disabled,false);await remove.emit('click');assert.ok(!sent.some(message=>message.type==='DELETE_JOB'));
   approved=true;await remove.emit('click');const deletion=sent.find(message=>message.type==='DELETE_JOB');
   assert.equal(deletion.account,'a');assert.equal(deletion.jobId,'j1');assert.equal(deletion.expectedUpdatedAt,30);
@@ -93,7 +160,7 @@ test('从其他标签取消收藏后，切回职位页立即刷新浮窗',async(
   let reads=0;const d=data();
   const h=visualHarness(async message=>{if(message.type==='INGEST')return{ok:true};reads++;return{ok:true,data:d};});
   await h.deliver({type:'PAGE_CONTEXT',account:'a',jobId:'j1',companyName:'示例公司',title:'前端'});
-  h.visibility(true);d.jobs=d.jobs.filter(job=>job.id!=='j1');h.visibility(false);
+  await h.visibility(true);d.jobs=d.jobs.filter(job=>job.id!=='j1');await h.visibility(false);
   await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(reads,2);assert.deepEqual(rowTitles(h),['后端']);
 });
@@ -103,9 +170,9 @@ test('浮窗收藏标识独立于沟通状态，JD标题是安全的详情页链
   const h=visualHarness(async message=>message.type==='INGEST'?{ok:true}:{ok:true,data:d});
   await h.deliver(snapshot());
   const rows=all(h.widget(),'bh-job'),link=find(rows[1],'bh-job-title');
-  assert.equal(link.tagName,'a');assert.equal(link.href,'https://www.zhipin.com/job_detail/job-1.html');assert.equal(link.target,'_blank');assert.equal(link.rel,'noopener noreferrer');
+  assert.equal(link.tagName,'A');assert.equal(link.href,'https://www.zhipin.com/job_detail/job-1.html');assert.equal(link.target,'_blank');assert.equal(link.rel,'noopener noreferrer');
   assert.equal(find(rows[1],'bh-favorite').textContent,'已收藏');assert.equal(currentStatus(h).textContent,'附件简历请求已发送');
-  assert.equal(find(rows[0],'bh-job-title').tagName,'span');
+  assert.equal(find(rows[0],'bh-job-title').tagName,'SPAN');
 });
 
 test('职位页浮窗只读展示已有公司记录，高亮当前JD并禁止编辑',async()=>{
@@ -147,8 +214,8 @@ test('浮窗保持后端对话时间顺序，只高亮当前JD而不将其置顶
   const h=visualHarness(async message=>{if(message.type==='INGEST')return{ok:true};queries.push(message.jobId);return{ok:true,data:d};});
   await h.deliver(snapshot());const w=h.widget(),rows=all(w,'bh-job');
   assert.equal(find(w,'bh-company').textContent,'示例公司');assert.ok(!w.textContent.includes('沟通助手'));
-  assert.equal(rows.length,2);assert.equal(rows.filter(r=>r.attributes['aria-current']==='true').length,1);
-  assert.deepEqual(rowTitles(h),['后端','前端']);assert.equal(rows[1].attributes['aria-current'],'true');assert.equal(currentStatus(h).textContent,'附件简历请求已发送');
+  assert.equal(rows.length,2);assert.equal(rows.filter(r=>r.getAttribute('aria-current')==='true').length,1);
+  assert.deepEqual(rowTitles(h),['后端','前端']);assert.equal(rows[1].getAttribute('aria-current'),'true');assert.equal(currentStatus(h).textContent,'附件简历请求已发送');
   const target=currentStatus(h);
   await h.deliver({type:'CONVERSATION',account:'a',row:{id:'c2',jobId:'j2'}});assert.equal(queries.at(-1),'j1');
   assert.equal(currentStatus(h),target,'相同内容的后台刷新不能替换可点击控件');
@@ -157,7 +224,7 @@ test('切换当前JD、修改状态或标题都不会重新排列浮窗',async()
   const d=data(),h=visualHarness(async m=>m.type==='INGEST'?{ok:true}:{ok:true,data:d});
   await h.deliver(snapshot());assert.deepEqual(rowTitles(h),['后端','前端']);
   d.jobs[0].current=true;d.jobs[1].current=false;d.jobs[1].status='passed';
-  await h.deliver(snapshot('a','j2'));assert.deepEqual(rowTitles(h),['后端','前端']);assert.equal(all(h.widget(),'bh-job')[0].attributes['aria-current'],'true');
+  await h.deliver(snapshot('a','j2'));assert.deepEqual(rowTitles(h),['后端','前端']);assert.equal(all(h.widget(),'bh-job')[0].getAttribute('aria-current'),'true');
   d.jobs[0].title='Z 职位';d.jobs[1].title='A 职位';await h.deliver({type:'CONVERSATION',account:'a',row:{id:'c1'}});
   assert.deepEqual(rowTitles(h),['Z 职位','A 职位']);
 });
@@ -172,7 +239,7 @@ test('浮窗同时保存JD状态与备注，自动刷新和摄取不丢编辑内
   const h=visualHarness(async message=>{sent.push(message);if(message.type==='INGEST')return{ok:true};if(message.type==='SAVE_JOB'){d.jobs[1]={...d.jobs[1],status:message.status,manual:true,note:message.note};return{ok:true};}reads++;return{ok:true,data:d};});
   await h.deliver(snapshot());await currentStatus(h).emit('click');
   const form=find(h.widget(),'bh-editor'),input=find(form,'bh-note-input'),select=find(form,'bh-status-select');
-  input.value='面试需要准备 <script>示例</script>';await input.emit('input');assert.equal(select.children.filter(o=>o.value==='interviewing').length,1);assert.ok(!select.children.some(o=>/^interview_/.test(o.value)));select.value='interviewing';await select.emit('change');
+  input.value='面试需要准备 <script>示例</script>';await input.emit('input');assert.equal([...select.children].filter(o=>o.value==='interviewing').length,1);assert.ok(![...select.children].some(o=>/^interview_/.test(o.value)));select.value='interviewing';await select.emit('change');
   h.tick();await h.deliver({type:'CONVERSATION',account:'a',row:{id:'c1'}});
   assert.equal(reads,1);assert.equal(find(h.widget(),'bh-note-input'),input);assert.match(input.value,/面试需要准备/);
   await form.emit('submit');const save=sent.find(m=>m.type==='SAVE_JOB');

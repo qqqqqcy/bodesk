@@ -4,12 +4,12 @@ import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
 import {webcrypto, createHash} from 'node:crypto';
 import {clientFor} from './support/client.js';
-import {inferStatus} from '../../extension/core.js';
+import {inferStatus} from '../../extension/dist/core.js';
 
 async function collect(context, {scenario = 'normal', stopAfterPage = false, switchAfterPage = false, allRows = false} = {}) {
   const client = await clientFor(context);
-  const source = (await readFile(new URL('../../extension/main.js', import.meta.url), 'utf8'))
-    .replace("const MOCK_ORIGIN='http://127.0.0.1:4173';", 'const MOCK_ORIGIN=' + JSON.stringify(client.origin) + ';');
+  const source = (await readFile(new URL('../../extension/dist/main.js', import.meta.url), 'utf8'))
+    .replace(/const MOCK_ORIGIN\s*=\s*["']http:\/\/127\.0\.0\.1:4173["'];/, 'const MOCK_ORIGIN=' + JSON.stringify(client.origin) + ';');
   await client.json('/__mock/state', {scenario});
   const config = await client.json('/__mock/state');
   const listing = await client.json('/__mock/list');

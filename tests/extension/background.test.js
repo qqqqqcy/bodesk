@@ -16,8 +16,8 @@ async function harness({db=new IDBFactory(),onSend}={}) {
     tabs:{onRemoved:event('removed'),onUpdated:event('updated'),query:async query=>{queries.push(query);return tabs;},sendMessage:async(id,message)=>{sent.push({id,message});return onSend?onSend(id,message):message.type==='ACCOUNT_INFO'?{account:B}:{ok:true};},create:async options=>{created.push(options);}},
     action:{onClicked:event('action')}
   };
-  await import(`../../extension/background.js?test=${instance++}`);
-  const ui={url:'chrome-extension://test/dashboard.html'};
+  await import(`../../extension/dist/background.js?test=${instance++}`);
+  const ui={url:'chrome-extension://test/dist/dashboard.html'};
   globalThis.chrome.runtime.sendMessage=async message=>{broadcasts.push(message);};
   const site={url:'https://www.zhipin.com/web/geek/chat',tab:{id:1}};
   const send=(message,sender=ui)=>new Promise(resolve=>{assert.equal(listener(message,sender,resolve),true);});
@@ -268,7 +268,7 @@ test('浮窗打开总视图时使用当前页面账号及窗口，不改变默�
   await h.ingest(snapshot(A,[row('mock','mock-job')]),mock);
   assert.equal((await h.get()).account,B);
   assert.equal((await h.send({type:'OPEN_DASHBOARD'},mock)).ok,true);
-  assert.equal(h.created.at(-1).url,'chrome-extension://test/dashboard.html?account='+A);
+  assert.equal(h.created.at(-1).url,'chrome-extension://test/dist/dashboard.html?account='+A);
   assert.equal(h.created.at(-1).windowId,7);
   assert.equal((await h.get()).account,B);
   const unknown={url:'http://127.0.0.1:4173/web/geek/chat',tab:{id:6}};
@@ -364,6 +364,60 @@ test('职位页预览只返回已有JD，重复浏览新职位新公司不写入
     assert.equal(result.data.currentJobId,jobId==='j1'?A+':job:j1':null);
   }
   assert.deepEqual(await h.get(A),before);
+});
+
+test('独立职位详情补全同 ID 的已有占位标题，保留状态和备注',async()=>{
+  const h=await harness();
+  const rows=[row('closed-contact','closed',{jobTitle:''}),row('active-contact','active',{jobTitle:''})];
+  await h.ingest(snapshot(A,rows));
+  await h.ingest(snapshot(B,rows));
+  const closedId=A+':job:closed';
+  assert.equal((await h.send({type:'SAVE_JOB',account:A,jobId:closedId,status:'interviewing',note:'保留备注'})).ok,true);
+  const detailPage=jobId=>({url:'https://www.zhipin.com/job_detail/'+jobId+'.html?source=test',tab:{id:4}});
+  const observe=(jobId,title,sender,extra={})=>h.ingest({type:'PAGE_CONTEXT',account:A,jobId,companyName:'模拟公司',title,...extra},sender);
+  assert.equal((await observe('closed','错配标题',detailPage('active'))).ok,true);
+  assert.equal((await h.get(A)).jobs.find(job=>job.id===closedId).title,'待识别 JD');
+  assert.equal((await observe('closed','前端工程师',detailPage('closed'))).summary.jobTitle,'前端工程师');
+  assert.equal((await observe('active','后端工程师',detailPage('active'),{favorite:false})).summary.jobTitle,'后端工程师');
+  assert.equal((await observe('new','未保存的新职位',detailPage('new'))).ok,true);
+  assert.equal((await observe('closed','另一个标题',detailPage('closed'))).summary.jobTitle,'前端工程师');
+  await h.ingest(snapshot(A,[row('closed-contact','closed',{jobTitle:'列表里的旧标题'}),rows[1]]));
+  const widget=await h.send({type:'WIDGET_GET',account:A,jobId:'active',preview:true},detailPage('active'));
+  assert.equal(widget.ok,true,widget.error);
+  assert.deepEqual(widget.data.jobs.map(job=>[job.title,job.current]),[['后端工程师',true],['前端工程师',false]]);
+  const closed=widget.data.jobs.find(job=>job.id===closedId);
+  assert.equal(closed.status,'interviewing');
+  assert.equal(closed.note,'保留备注');
+  assert.ok((await h.get(B)).jobs.every(job=>job.title==='待识别 JD'));
+});
+
+test('浮窗为每个职位选择最近的人工消息，并区分发送方', async () => {
+  const h = await harness();
+  const site = {url:'https://www.zhipin.com/web/geek/chat',tab:{id:1}};
+  const collect = (contact, job, messages) => h.ingest({type:'CONVERSATION',account:A,row:row(contact,job),messages});
+  const previews = async () => {
+    const response = await h.send({type:'WIDGET_GET',account:A,jobId:'j1'}, site);
+    assert.equal(response.ok, true, response.error);
+    return Object.fromEntries(response.data.jobs.map(job => [job.title, job.latestMessage]));
+  };
+  await collect('shared', 'j1', [
+    {id:'101',time:100,jobId:'j1',text:'我想了解岗位',direction:'out'},
+    {id:'102',time:190,text:'较新但归属待确认',direction:'out'},
+    {id:'103',time:200,jobId:'j1',text:'对方已查看了您的附件简历',type:1,bodyType:4,direction:'in'},
+    {id:'104',time:210,jobId:'j1',text:'对方撤回了一条消息',direction:'in'},
+  ]);
+  await collect('shared', 'j2', [{id:'105',time:160,jobId:'j2',text:'这边还在招聘',direction:'in'}]);
+  await collect('system-only', 'j3', [{id:'301',time:250,text:'附件简历请求已发送',isSystem:true,direction:'out'}]);
+  assert.deepEqual(await previews(), {
+    '职位 j1':{text:'我想了解岗位',direction:'out'},
+    '职位 j2':{text:'这边还在招聘',direction:'in'},
+    '职位 j3':undefined,
+  });
+  await collect('other', 'j1', [{id:'401',time:201,text:'下周方便聊吗？',direction:'in'}]);
+  await collect('other', 'j1', [{id:'402',time:90,text:'更早的消息',direction:'out'}]);
+  assert.deepEqual((await previews())['职位 j1'], {text:'下周方便聊吗？',direction:'in'});
+  await collect('other', 'j1', [{id:'403',time:202,text:'发送方没有记录的消息',direction:'unknown'}]);
+  assert.deepEqual((await previews())['职位 j1'], {text:'发送方没有记录的消息',direction:'unknown'});
 });
 
 test('浮窗按首次消息排序，历史页、多人及当前职位切换保持稳定',async()=>{

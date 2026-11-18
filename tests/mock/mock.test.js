@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {SCENARIOS, createWorld, historyPage, appendMessage} from '../../mock/fixtures.js';
+import {SCENARIOS, createWorld, historyPage, appendMessage} from '../../mock/fixtures.ts';
 import {clientFor} from './support/client.js';
-import {inferStatus, mergeJob} from '../../extension/core.js';
+import {inferStatus, mergeJob} from '../../extension/dist/core.js';
 
 // Mirror the fields retained by MAIN's cleanRow / cleanMessage before calling the real status rules.
 function cleanMessages(world, conversation) {
@@ -299,7 +299,12 @@ test('可重现 HTTP、非 JSON、业务异常及游标停滞', async context =>
 
 test('静态页面、职位路径、错误输入及跨源写入', async context => {
   const client = await clientFor(context);
-  for (const path of ['/web/geek/chat', '/web/geek/jobs', '/job_detail/alpha-normal-job-frontend.html', '/job_detail/alpha-ambiguous_resume-job-fullstack.html', '/app.js', '/style.css']) assert.equal((await client.request(path)).status, 200);
+  for (const path of ['/web/geek/chat', '/web/geek/jobs', '/job_detail/alpha-normal-job-frontend.html', '/job_detail/alpha-ambiguous_resume-job-fullstack.html']) assert.equal((await client.request(path)).status, 200);
+  const html = await (await client.request('/web/geek/chat')).text();
+  const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^\"]+)"/g)].map(match => match[1]);
+  assert.ok(assets.some(path => path.endsWith('.js')));
+  assert.ok(assets.some(path => path.endsWith('.css')));
+  for (const path of assets) assert.equal((await client.request(path)).status, 200);
   assert.equal((await client.request('/not-found')).status, 404);
   assert.equal((await client.request('/__mock/state', {scenario: 'missing'})).status, 400);
   assert.equal((await client.request('/wapi/zpchat/geek/historyMsg?bossId=alpha-normal-boss-1&c=-1')).status, 400);
@@ -312,10 +317,10 @@ test('单一扩展同时支持真实站点与本地 mock，mock 账号使用专�
   const manifest = JSON.parse(await readFile(new URL('manifest.json', extension), 'utf8'));
   assert.deepEqual(manifest.host_permissions, ['https://www.zhipin.com/*', 'http://127.0.0.1:4173/*', 'http://localhost:4173/*']);
   assert.ok(manifest.content_scripts.every(script => ['https://www.zhipin.com/web/*', 'http://127.0.0.1:4173/web/*'].every(pattern => script.matches.includes(pattern))));
-  const main = await readFile(new URL('main.js', extension), 'utf8');
+  const main = await readFile(new URL('src/main.ts', extension), 'utf8');
   assert.match(main, /const MOCK_ORIGIN='http:\/\/127\.0\.0\.1:4173';/);
   assert.match(main, /isMock\?'boss:mock:':'boss:'/);
-  const background = await readFile(new URL('background.js', extension), 'utf8');
+  const background = await readFile(new URL('src/background.ts', extension), 'utf8');
   assert.match(background, /SITE_ORIGINS=\['https:\/\/www\.zhipin\.com','http:\/\/127\.0\.0\.1:4173','http:\/\/localhost:4173'\]/);
   assert.match(background, /SITE_ORIGINS\.map\(origin=>origin\+'\/web\/geek\/chat\*'\)/);
 });
