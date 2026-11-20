@@ -391,6 +391,28 @@ test('独立职位详情补全同 ID 的已有占位标题，保留状态和备�
   assert.ok((await h.get(B)).jobs.every(job=>job.title==='待识别 JD'));
 });
 
+test('现有已采集面试卡片回填自动状态，保留手动状态和备注', async () => {
+  const h = await harness();
+  const jobId = A + ':job:interview';
+  await h.ingest({type:'CONVERSATION',account:A,row:row('candidate','interview'),messages:[
+    {id:'1',time:10,text:'您好，想了解这个岗位',type:1,bodyType:1,direction:'out'},
+    {id:'2',time:20,text:'模拟招聘方邀请您线上面试',type:3,bodyType:14,templateId:1,direction:'in'},
+    {id:'3',time:30,text:'接受了面试邀请',type:3,bodyType:14,templateId:1,messageType:'interview',isSystem:false,direction:'out'},
+  ]});
+  await h.send({type:'SAVE_JOB',account:A,jobId,status:'passed',note:'保留备注'});
+  await updateStored(h,'jobs',job => ({...job,autoStatus:'awaiting_boss',autoSchemaVersion:5}));
+  const site = {url:'https://www.zhipin.com/web/geek/chat',tab:{id:1}};
+  const widget = async () => (await h.send({type:'WIDGET_GET',account:A,jobId:'interview'},site)).data.jobs[0];
+  const manual = await widget();
+  assert.equal(manual.status,'passed');
+  assert.equal(manual.note,'保留备注');
+  assert.deepEqual(manual.latestMessage,{text:'您好，想了解这个岗位',direction:'out'});
+  await h.send({type:'SAVE_JOB',account:A,jobId,status:'auto'});
+  const automatic = await widget();
+  assert.equal(automatic.status,'interviewing');
+  assert.equal(automatic.manual,false);
+});
+
 test('浮窗为每个职位选择最近的人工消息，并区分发送方', async () => {
   const h = await harness();
   const site = {url:'https://www.zhipin.com/web/geek/chat',tab:{id:1}};
@@ -418,6 +440,33 @@ test('浮窗为每个职位选择最近的人工消息，并区分发送方', as
   assert.deepEqual((await previews())['职位 j1'], {text:'下周方便聊吗？',direction:'in'});
   await collect('other', 'j1', [{id:'403',time:202,text:'发送方没有记录的消息',direction:'unknown'}]);
   assert.deepEqual((await previews())['职位 j1'], {text:'发送方没有记录的消息',direction:'unknown'});
+});
+
+test('最新人工消息跳过资讯、联系方式和交互卡片，保留同样文字的普通聊天', async () => {
+  const h = await harness();
+  const site = {url:'https://www.zhipin.com/web/geek/chat',tab:{id:1}};
+  const wechatText = '模拟联系人的微信号：mock_wechat';
+  const cards = [
+    {id:'2',time:20,type:4,bodyType:16,templateId:1,messageType:'articles',text:'你与该职位竞争者PK情况'},
+    {id:'3',time:30,type:1,bodyType:7,templateId:1,messageType:'dialog',text:'希望交换微信'},
+    {id:'4',time:40,type:1,bodyType:1,templateId:5,messageType:'text',text:wechatText},
+    {id:'5',time:45,type:1,bodyType:1,templateId:5,text:wechatText},
+    {id:'6',time:50,type:1,bodyType:7,text:'希望获取您的附件简历'},
+  ].map(message => ({...message,isSystem:false,direction:'in'}));
+  const collect = (contact, job, messages) => h.ingest({type:'CONVERSATION',account:A,row:row(contact,job),messages});
+  const previews = async () => {
+    const response = await h.send({type:'WIDGET_GET',account:A,jobId:'j1'},site);
+    assert.equal(response.ok,true,response.error);
+    return Object.fromEntries(response.data.jobs.map(job => [job.id,job.latestMessage]));
+  };
+  await collect('chat','j1',[{id:'1',time:10,type:1,bodyType:1,direction:'out',text:'你好，请问方便沟通吗？'},...cards]);
+  await collect('cards-only','j2',cards);
+  assert.deepEqual(await previews(), {
+    [A+':job:j1']:{text:'你好，请问方便沟通吗？',direction:'out'},
+    [A+':job:j2']:undefined,
+  });
+  await collect('chat','j1',[{id:'7',time:60,type:1,bodyType:1,templateId:1,messageType:'text',direction:'in',text:wechatText}]);
+  assert.deepEqual((await previews())[A+':job:j1'],{text:wechatText,direction:'in'});
 });
 
 test('浮窗按首次消息排序，历史页、多人及当前职位切换保持稳定',async()=>{
@@ -765,9 +814,9 @@ test('读取总视图及恢复自动判断时主动迁移旧状态并保留手�
   const jobId=(await h.get()).jobs[0].id;
   await h.send({type:'SET_STATUS',account:A,jobId,status:'interviewing'});
   await updateStored(h,'jobs',job=>{delete job.autoContributions;delete job.autoSchemaVersion;return {...job,autoStatus:'resume_viewed',autoLabel:'旧状态'};});
-  let job=(await h.get()).jobs[0];assert.equal(job.autoSchemaVersion,5);assert.equal(job.autoStatus,'awaiting_self');assert.equal(job.status,'interviewing');
+  let job=(await h.get()).jobs[0];assert.equal(job.autoSchemaVersion,6);assert.equal(job.autoStatus,'awaiting_self');assert.equal(job.status,'interviewing');
   await updateStored(h,'jobs',job=>({...job,autoSchemaVersion:4,autoStatus:'resume_sent',autoContributions:{old:{unverified:{status:'resume_sent'}}}}));
-  job=(await h.get()).jobs[0];assert.equal(job.autoSchemaVersion,5);assert.equal(job.autoStatus,'awaiting_self');assert.equal(job.status,'interviewing');
+  job=(await h.get()).jobs[0];assert.equal(job.autoSchemaVersion,6);assert.equal(job.autoStatus,'awaiting_self');assert.equal(job.status,'interviewing');
   await updateStored(h,'jobs',job=>{delete job.autoContributions;delete job.autoSchemaVersion;return {...job,autoStatus:'resume_sent'};});
   assert.equal((await h.send({type:'SET_STATUS',account:A,jobId,status:'auto'})).ok,true);
   job=(await h.get()).jobs[0];assert.equal(job.status,'awaiting_self');assert.equal(job.manual,false);

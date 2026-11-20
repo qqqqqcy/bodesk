@@ -1,15 +1,16 @@
-import {useState, useSyncExternalStore} from 'react';
+import {useId, useRef, useState, useSyncExternalStore} from 'react';
 import {createRoot} from 'react-dom/client';
 import type {ExternalRecord, HumanMessagePreview, WidgetContext, WidgetData, WidgetJob} from './types.ts';
 import {jobURL, normalizeStatus, statusLabel} from './status.ts';
 import {attachWidgetDragHandle} from './widget-position.ts';
 
 const CHANNEL = 'boss-local-helper-v1';
+const statusOptions = ['auto', 'awaiting_self', 'awaiting_boss', 'resume_requested', 'resume_applied', 'resume_sent', 'resume_viewed', 'communication_rejected', 'interviewing', 'passed', 'failed', 'unknown'];
+type NoteKind = 'job-note' | 'company-note';
+type EditorKind = NoteKind | 'job-status';
 interface Draft {
-  note: string;
-  status?: string;
-  baseNote: string;
-  baseStatus?: string;
+  value: string;
+  baseValue: string;
   revision: number;
 }
 interface View {
@@ -31,16 +32,21 @@ const subscribe = (listener: () => void) => {listeners.add(listener); return () 
 const getSnapshot = () => view;
 function update(patch: Partial<View>) {view = {...view, ...patch}; for (const listener of listeners) listener();}
 const showNotice = (notice: string) => update({notice});
-const editorKey = (kind: string, id?: string) => JSON.stringify([view.context?.account, kind, id]);
+const editorKey = (kind: EditorKind, id: string, account = view.context?.account) => JSON.stringify([account, kind, id]);
 const errorText = (error: unknown) => error instanceof Error ? error.message : '本地操作失败';
 const post = (data: ExternalRecord) => window.postMessage({channel: CHANNEL, direction: 'to-page', data}, location.origin);
 
-function openEditor(kind: string, id: string, initial: {note: string; status?: string}) {
-  if (!view.context || view.context.preview || !id) return;
-  const key = editorKey(kind, id);
-  if (!drafts.has(key)) drafts.set(key, {...initial, baseNote: initial.note, baseStatus: initial.status, revision: 0});
+function activateEditor(key: string) {
   renderVersion++;
   update({editor: key, session: view.session + 1});
+}
+
+function openNoteEditor(kind: NoteKind, id: string, initial: string) {
+  if (!view.context || view.context.preview || !id) return;
+  const key = editorKey(kind, id);
+  if (view.editor === key) return;
+  if (!drafts.has(key)) drafts.set(key, {value: initial, baseValue: initial, revision: 0});
+  activateEditor(key);
 }
 
 async function refreshWidget() {
@@ -58,52 +64,119 @@ async function refreshWidget() {
   } catch {if (version === renderVersion) showNotice('扩展连接中断，请刷新页面');}
 }
 
-function Editor({kind, id, job}: {kind: 'job' | 'company'; id: string; job?: WidgetJob}) {
+function NoteEditor({kind, id, title}: {kind: NoteKind; id: string; title?: string}) {
   const key = editorKey(kind, id);
   const draft = drafts.get(key)!;
-  const [note, setNote] = useState(draft.note);
-  const [status, setStatus] = useState(draft.status || 'auto');
+  const [value, setValue] = useState(draft.value);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
   const context = view.context!;
   const data = view.data!;
   const session = view.session;
-  const options = ['auto', 'awaiting_self', 'awaiting_boss', 'resume_requested', 'resume_applied', 'resume_sent', 'resume_viewed', 'communication_rejected', 'interviewing', 'passed', 'failed', 'unknown'];
-  if (job?.manual && !options.includes(normalizeStatus(job.status))) options.push(normalizeStatus(job.status));
+  const label = kind === 'job-note' ? 'JD 备注' : '公司备注';
   async function save(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (saving) return;
-    const submitted = {note, status: kind === 'job' ? status : undefined, revision: draft.revision};
-    const noteChanged = submitted.note !== draft.baseNote;
-    const statusChanged = kind === 'job' && submitted.status !== draft.baseStatus;
+    const {revision, baseValue} = draft;
     setSaving(true); setFeedback('正在保存…');
     let message: ExternalRecord | undefined;
-    if (kind === 'company' && noteChanged) message = {type: 'SAVE_COMPANY_NOTE', account: context.account, companyId: id, companyName: data.companyName, note, expectedNote: draft.baseNote};
-    if (kind === 'job' && (noteChanged || statusChanged)) message = {
-      type: 'SAVE_JOB', account: context.account, jobId: id,
-      ...(statusChanged ? {status, expectedManualStatus: draft.baseStatus === 'auto' ? null : draft.baseStatus} : {}),
-      ...(noteChanged ? {note, expectedNote: draft.baseNote} : {}),
-      context: {companyId: data.companyId, companyName: data.companyName, title: job?.title},
-    };
+    if (value !== baseValue) {
+      if (kind === 'company-note') message = {type: 'SAVE_COMPANY_NOTE', account: context.account, companyId: id, companyName: data.companyName, note: value, expectedNote: baseValue};
+      else message = {
+        type: 'SAVE_JOB', account: context.account, jobId: id,
+        note: value, expectedNote: baseValue,
+        context: {companyId: data.companyId, companyName: data.companyName, title},
+      };
+    }
     try {
       if (message) {const result = await chrome.runtime.sendMessage(message); if (!result?.ok) throw new Error(result?.error || '本地保存失败');}
       const owns = view.context === context && view.editor === key && view.session === session;
       if (drafts.get(key) === draft) {
-        if (noteChanged) draft.baseNote = submitted.note;
-        if (statusChanged) draft.baseStatus = submitted.status;
-        if (draft.revision === submitted.revision && (owns || view.editor !== key)) drafts.delete(key);
+        if (message) draft.baseValue = value;
+        if (draft.revision === revision && (owns || view.editor !== key)) drafts.delete(key);
       }
-      if (owns) {update({editor: null}); await refreshWidget(); showNotice(message ? '已保存' : '没有更改');}
+      if (owns) {update({editor: null}); await refreshWidget(); showNotice(message ? '已保存备注' : '没有更改');}
     } catch (error) {setFeedback(errorText(error)); setSaving(false);}
   }
   return <form className="bh-editor" onSubmit={save}>
-    {kind === 'job' && <label className="bh-field">当前状态<select className="bh-status-select" aria-label="修改职位状态" value={status} disabled={saving} onChange={event => {draft.status = event.target.value; draft.revision++; setStatus(draft.status);}}>
-      {options.map(value => <option key={value} value={value}>{value === 'auto' ? '跟随自动判断' : statusLabel(value)}</option>)}
-    </select></label>}
-    <label className="bh-field">{kind === 'company' ? '公司备注' : 'JD 备注'}<textarea className="bh-note-input" aria-label={kind === 'company' ? '公司备注' : 'JD 备注'} rows={3} maxLength={10000} value={note} disabled={saving} placeholder={kind === 'company' ? '记录这家公司的沟通情况、偏好等' : '记录这个职位的沟通要点、面试安排等'} onChange={event => {draft.note = event.target.value; draft.revision++; setNote(draft.note);}} /></label>
+    <label className="bh-field">{label}
+      <textarea className="bh-note-input" rows={3} maxLength={10000} value={value} disabled={saving} autoFocus placeholder={kind === 'company-note' ? '记录这家公司的沟通情况、偏好等' : '记录这个职位的沟通要点、面试安排等'} onChange={event => {
+        draft.value = event.target.value;
+        draft.revision++;
+        setValue(draft.value);
+      }} />
+    </label>
     <p className="bh-editor-feedback" role="status" hidden={!feedback}>{feedback}</p>
-    <div className="bh-editor-actions"><button className="bh-save" type="submit" disabled={saving}>保存</button><button className="bh-cancel" type="button" disabled={saving} onClick={() => {drafts.delete(key); update({editor: null}); void refreshWidget();}}>取消</button></div>
+    <div className="bh-editor-actions"><button className="bh-save" type="submit" disabled={saving}>保存备注</button><button className="bh-cancel" type="button" disabled={saving} onClick={() => {drafts.delete(key); update({editor: null}); void refreshWidget();}}>取消</button></div>
   </form>;
+}
+
+const statusOptionLabel = (value: string) => value === 'auto' ? '跟随自动判断' : statusLabel(value);
+
+function showStatusConfirmation(dialog: HTMLDialogElement | null) {
+  if (!dialog) return;
+  dialog.showModal();
+  return () => dialog.close();
+}
+
+function StatusPicker({id, job, editor, dismiss}: {id: string; job: WidgetJob; editor: string; dismiss: () => Promise<void>}) {
+  const [selection, setSelection] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const context = view.context!;
+  const data = view.data!;
+  const session = view.session;
+  const manualStatus = job.manual ? normalizeStatus(job.status) : null;
+  const current = manualStatus ?? 'auto';
+  const options = statusOptions.includes(current) ? statusOptions : [...statusOptions, current];
+  const firstChoice = options.find(option => option !== current);
+
+  function cancel() {
+    if (saving) return;
+    setSelection(null);
+    setError('');
+  }
+
+  async function confirm() {
+    if (!selection || saving || view.editor !== editor || view.session !== session) return;
+    setSaving(true);
+    setError('');
+    try {
+      const result = await chrome.runtime.sendMessage({type: 'SAVE_JOB', account: context.account, jobId: job.id,
+        status: selection, expectedManualStatus: manualStatus,
+        context: {companyId: data.companyId, companyName: data.companyName, title: job.title},
+      });
+      if (!result?.ok) throw new Error(result?.error || '本地保存失败');
+      if (view.context === context && view.editor === editor && view.session === session) {
+        await dismiss();
+        if (view.context === context && !view.editor) showNotice('已保存状态');
+      }
+    } catch (failure) {
+      setError(errorText(failure));
+      setSaving(false);
+    }
+  }
+
+  return <>
+    <div id={id} className="bh-status-picker" role="group" aria-label="职位状态选项" onKeyDown={event => {
+      if (event.key === 'Escape') {event.stopPropagation(); void dismiss();}
+    }}>
+      {options.map(option => <button className="bh-status-option" type="button" key={option} value={option}
+        disabled={option === current} autoFocus={option === firstChoice} onClick={() => setSelection(option)}>
+        {statusOptionLabel(option)}{option === current && <span>当前</span>}
+      </button>)}
+    </div>
+    {selection && <dialog className="bh-status-dialog" ref={showStatusConfirmation} aria-labelledby={id + '-title'} aria-describedby={id + '-change'}
+      onCancel={event => {event.preventDefault(); cancel();}}>
+      <h3 id={id + '-title'}>确认修改职位状态</h3>
+      <p id={id + '-change'}>将「{job.title || '当前职位'}」的状态设为「{statusOptionLabel(selection)}」？</p>
+      {error && <p className="bh-status-error" role="alert">{error}</p>}
+      <div className="bh-editor-actions">
+        <button className="bh-cancel" type="button" autoFocus disabled={saving} onClick={cancel}>取消</button>
+        <button className="bh-save" type="button" disabled={saving} onClick={() => void confirm()}>{saving ? '正在保存…' : '确认修改'}</button>
+      </div>
+    </dialog>}
+  </>;
 }
 
 function LatestMessage({text, direction}: HumanMessagePreview) {
@@ -116,9 +189,21 @@ function LatestMessage({text, direction}: HumanMessagePreview) {
 
 function Job({job, context}: {job: WidgetJob; context: WidgetContext}) {
   const [deleting, setDeleting] = useState(false);
+  const statusButton = useRef<HTMLButtonElement>(null);
+  const statusPickerId = useId();
   const url = jobURL(job.url);
-  const key = editorKey('job', job.id);
-  const open = () => openEditor('job', job.id, {status: job.manual ? normalizeStatus(job.status) : 'auto', note: job.note || ''});
+  const statusKey = editorKey('job-status', job.id);
+  const noteKey = editorKey('job-note', job.id);
+  const status = !job.manual && job.status === 'resume_event' && job.label ? job.label : statusLabel(job.status);
+  const statusText = status + (job.manual ? '（手动）' : '');
+  const statusOpen = view.editor === statusKey;
+  const canEditStatus = !context.preview && !!job.id;
+  async function dismissStatus() {
+    update({editor: null});
+    await refreshWidget();
+    if (view.context === context && !view.editor) statusButton.current?.focus();
+  }
+  const openNote = () => openNoteEditor('job-note', job.id, job.note || '');
   async function remove() {
     if (view.editor) {showNotice('请先保存或取消正在编辑的内容'); return;}
     if (!window.confirm('确定删除“' + (job.title || '未命名职位') + '”？该职位的备注和状态将被删除，之后不会自动重新收录；已有对话会保留。')) return;
@@ -126,22 +211,33 @@ function Job({job, context}: {job: WidgetJob; context: WidgetContext}) {
     try {
       const result = await chrome.runtime.sendMessage({type: 'DELETE_JOB', account: context.account, jobId: job.id, expectedUpdatedAt: job.updatedAt});
       if (!result?.ok) throw new Error(result?.error || '删除职位失败');
-      drafts.delete(JSON.stringify([context.account, 'job', job.id]));
+      drafts.delete(editorKey('job-note', job.id, context.account));
       if (view.context?.account === context.account) {await refreshWidget(); showNotice('已删除“' + (job.title || '未命名职位') + '”。');}
       else showNotice('职位已删除。');
     } catch (error) {showNotice(errorText(error));} finally {setDeleting(false);}
   }
-  return <div className={'bh-job' + (job.current ? ' bh-current' : '')} aria-current={job.current ? 'true' : undefined}>
-    <div className="bh-job-line">{url ? <a className="bh-job-title" href={url} target="_blank" rel="noopener noreferrer">{job.title || '待识别 JD'}</a> : <span className="bh-job-title">{job.title || '待识别 JD'}</span>}
-      <button className="bh-job-status" type="button" disabled={context.preview || !job.id} aria-label={(context.preview ? '查看 ' : '修改 ') + (job.title || '当前职位') + ' 的状态'} onClick={open}>{(!job.manual && job.status === 'resume_event' && job.label ? job.label : statusLabel(job.status)) + (job.manual ? '（手动）' : '')}</button></div>
-    {job.favorite && <span className="bh-favorite">已收藏</span>}
+  return <article className={'bh-job' + (job.current ? ' bh-current' : '')} aria-current={job.current ? 'true' : undefined}>
+    {job.current && <span className="bh-current-label">当前职位</span>}
+    <div className="bh-job-heading-row">
+      <h3 className="bh-job-heading">{url ? <a className="bh-job-title" href={url} target="_blank" rel="noopener noreferrer">{job.title || '待识别 JD'}</a> : <span className="bh-job-title">{job.title || '待识别 JD'}</span>}</h3>
+      {job.favorite && <span className="bh-favorite">已收藏</span>}
+    </div>
+    <div className="bh-job-line">
+      <span className="bh-record-label">沟通状态</span>
+      <button ref={statusButton} className="bh-job-status" type="button" disabled={!canEditStatus}
+        aria-label={canEditStatus ? statusText + '，修改' + (job.title || '当前职位') + '的状态' : undefined}
+        aria-expanded={canEditStatus ? statusOpen : undefined} aria-controls={statusOpen ? statusPickerId : undefined}
+        onClick={() => {if (statusOpen) void dismissStatus(); else activateEditor(statusKey);}}
+        onKeyDown={event => {if (statusOpen && event.key === 'Escape') {event.stopPropagation(); void dismissStatus();}}}>{statusText}</button>
+    </div>
+    {statusOpen && <StatusPicker key={view.session} id={statusPickerId} job={job} editor={statusKey} dismiss={dismissStatus} />}
     {job.latestMessage && <LatestMessage {...job.latestMessage} />}
-    {view.editor === key ? <Editor key={key + ':' + view.session} kind="job" id={job.id} job={job} /> : <>
+    {view.editor === noteKey ? <NoteEditor key={noteKey + ':' + view.session} kind="job-note" id={job.id} title={job.title} /> : <>
       {job.note && <p className="bh-note-text">{job.note}</p>}
       {!!job.noteConflicts?.length && <details className="bh-note-history"><summary>合并前的备注（{job.noteConflicts.length}）</summary>{job.noteConflicts.map((note, index) => <p className="bh-note-text" key={index}>{note.text}</p>)}</details>}
-      <div className="bh-job-actions">{!context.preview && <button className="bh-link-button bh-job-note-edit" type="button" disabled={!job.id} onClick={open}>{job.note ? '编辑备注' : '添加备注'}</button>}<button className="bh-link-button bh-job-delete" type="button" disabled={deleting || !job.id || !job.persisted} aria-label={'删除 ' + (job.title || '未命名职位')} onClick={() => void remove()}>删除</button></div>
+      <div className="bh-job-actions">{!context.preview && <button className="bh-link-button bh-job-note-edit" type="button" disabled={!job.id} onClick={openNote}>{job.note ? '编辑备注' : '添加备注'}</button>}<button className="bh-link-button bh-job-delete" type="button" disabled={deleting || !job.id || !job.persisted} aria-label={'删除 ' + (job.title || '未命名职位')} onClick={() => void remove()}>删除</button></div>
     </>}
-  </div>;
+  </article>;
 }
 
 function Widget() {
@@ -149,7 +245,7 @@ function Widget() {
   const [collapsed, setCollapsed] = useState(false);
   const {context, data, editor, session, notice} = current;
   const companyId = data?.companyId || '';
-  const key = editorKey('company', companyId);
+  const key = editorKey('company-note', companyId);
   async function dashboard() {
     try {
       const result = await chrome.runtime.sendMessage({type: 'OPEN_DASHBOARD', account: context?.account || lastAccount});
@@ -158,20 +254,30 @@ function Widget() {
   }
   return <>
     <div className="bh-widget-header">
-      <div className="bh-widget-drag" ref={attachWidgetDragHandle} role="group" tabIndex={0} aria-label="拖动浮窗，或用方向键移动" aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight" title="拖动浮窗"><span aria-hidden="true">⠿</span></div>
-      <div className="bh-company-line" hidden={collapsed}>
-        <strong className="bh-company">{data?.companyName || context?.companyName || (data ? '公司待识别' : '请选择一个对话或职位')}</strong>
-        <button className="bh-link-button" type="button" aria-label="编辑公司备注" disabled={!companyId || context?.preview} onClick={() => openEditor('company', companyId, {note: data?.companyNote || ''})}>备注</button>
-      </div>
+      <div className="bh-widget-drag" ref={attachWidgetDragHandle} role="group" tabIndex={0} aria-label="拖动浮窗，或用方向键移动" aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight" title="拖动浮窗" />
+      <h2 className="bh-company" hidden={collapsed}>{data?.companyName || context?.companyName || (data ? '公司待识别' : '请选择一个对话或职位')}</h2>
       <button className="bh-widget-toggle" type="button" aria-expanded={!collapsed} aria-controls="boss-local-helper-widget-body" onClick={() => setCollapsed(previous => !previous)}>
         {collapsed ? '展开浮窗' : '收起'}
       </button>
     </div>
     <div id="boss-local-helper-widget-body" className="bh-widget-body" hidden={collapsed}>
-      <div className="bh-company-notes">{editor === key ? <Editor key={key + ':' + session} kind="company" id={companyId} /> : data?.companyNote && <p className="bh-note-text">{data.companyNote}</p>}</div>
-      <div className="bh-jobs">{context && data?.jobs?.map(job => <Job key={context.account + ':' + job.id} job={job} context={context} />)}</div>
-      <p className="bh-notice" role="status" hidden={!notice}>{notice}</p>
-      <div className="bh-controls"><button className="bh-overview" type="button" onClick={() => void dashboard()}>采集 / 导出</button></div>
+      <div className="bh-records">
+        {context && <div className="bh-company-notes">
+          {editor === key ? <NoteEditor key={key + ':' + session} kind="company-note" id={companyId} /> : <>
+            <div className="bh-company-note-heading">
+              <span className="bh-record-label">公司备注</span>
+              <button className="bh-link-button bh-company-note-edit" type="button" aria-label={data?.companyNote ? '编辑公司备注' : '添加公司备注'} disabled={!companyId || context.preview} onClick={() => openNoteEditor('company-note', companyId, data?.companyNote || '')}>{data?.companyNote ? '编辑' : '添加'}</button>
+            </div>
+            {data?.companyNote && <p className="bh-note-text">{data.companyNote}</p>}
+          </>}
+        </div>}
+        {context && !!data?.jobs?.length && <section className="bh-jobs" aria-labelledby="bh-jobs-heading">
+          <div className="bh-jobs-heading"><h2 id="bh-jobs-heading">职位记录</h2><span>{data.jobs.length} 个</span></div>
+          {data.jobs.map(job => <Job key={context.account + ':' + job.id} job={job} context={context} />)}
+        </section>}
+        <p className="bh-notice" role="status" hidden={!notice}>{notice}</p>
+      </div>
+      <div className="bh-controls"><button className="bh-overview" type="button" onClick={() => void dashboard()}>采集与导出</button></div>
     </div>
   </>;
 }
@@ -221,7 +327,7 @@ window.addEventListener('message', async event => {
 });
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'BUILD_RELOAD_READY') {
-    sendResponse({ready: !view.editor && ![...drafts.values()].some(draft => draft.note !== draft.baseNote || draft.status !== draft.baseStatus)});
+    sendResponse({ready: !view.editor && ![...drafts.values()].some(draft => draft.value !== draft.baseValue)});
     return;
   }
   if (message.type === 'ACCOUNT_INFO') {sendResponse({account: lastAccount}); return;}

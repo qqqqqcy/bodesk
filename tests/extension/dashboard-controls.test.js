@@ -59,3 +59,17 @@ test('导出失败会显示错误，恢复按钮状态', async () => {
   assert.match(harness.document.getElementById('feedback').textContent, /模拟导出失败/);
   assert.equal(button.disabled, false);
 });
+
+test('仅在已知总数时显示本次处理进度，使用同一账号的最新计数', async () => {
+  let sync = {running: false, processed: 0, total: 0};
+  const harness = browserHarness(source, async message => ({ok: true, data: {...snapshot(message.account), sync}}), options);
+  await flush();
+  assert.equal(harness.document.querySelector('progress'), null);
+
+  sync = {running: true, processed: 4, total: 10, failed: 1};
+  await harness.document.getElementById('refresh').emit('click');
+  const progress = harness.document.querySelector('progress');
+  assert.equal(progress.value, 4);
+  assert.equal(progress.max, 10);
+  assert.match(harness.document.getElementById('sync-progress').textContent, /失败1/);
+});

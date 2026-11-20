@@ -51,14 +51,14 @@ function Dashboard() {
   }
   async function sync() {
     await action(async () => {
-      state.current.syncRequested = true; setSyncRequested(true); notify('正在请求更新…');
-      try {await request({type: 'SYNC'}); await load(); if (!state.current.stopping) notify('更新请求已受理，请查看同步进度。');}
+      state.current.syncRequested = true; setSyncRequested(true); notify('正在请求采集…');
+      try {await request({type: 'SYNC'}); await load(); if (!state.current.stopping) notify('已发送采集请求。');}
       finally {state.current.syncRequested = false; setSyncRequested(false);}
     });
   }
   async function stop() {
     if (state.current.stopping || !(state.current.syncRequested || (!state.current.busy && state.current.db?.sync.running))) return;
-    state.current.stopping = true; setStopping(true); notify('正在请求停止同步…');
+    state.current.stopping = true; setStopping(true); notify('正在请求停止采集…');
     try {await request({type: 'STOP_SYNC'}); await load(); notify('已发送停止请求，已保存的记录仍可查看。');}
     catch (error) {notify('停止或刷新失败：' + errorText(error) + '。请刷新确认同步状态。', true);}
     finally {state.current.stopping = false; setStopping(false);}
@@ -91,22 +91,58 @@ function Dashboard() {
   }, []);
   const current = db?.sync || {};
   const entries = Object.entries(current);
+  const {processed, total, failed} = current;
+  const progress = typeof processed === 'number' && Number.isFinite(processed) && processed >= 0
+    && typeof total === 'number' && Number.isFinite(total) && total > 0
+    ? {value: Math.min(processed, total), max: total} : null;
+  const syncState = current.running ? '采集中' : current.complete ? '本次采集已结束' : entries.length ? '当前未采集' : '暂无采集记录';
+
   return <main className="shell">
-    <header className="page-header"><div><p className="eyebrow">求职记录</p><h1>采集与导出</h1><p className="subtitle">更新聊天记录，查看采集进度或导出本地数据。</p></div>
-      <div className="actions"><button id="refresh" type="button" disabled={busy || stopping} onClick={() => void action(async () => {await load(); notify('已刷新本地数据。');})}>刷新</button><button id="export" type="button" disabled={busy || stopping || !db} onClick={() => void exportData()}>导出 JSON</button><button id="sync" className="primary" type="button" disabled={busy || stopping || !db || current.running} onClick={() => void sync()}>{syncRequested ? '正在请求更新…' : '更新采集'}</button><button id="stop-sync" type="button" disabled={stopping || !(syncRequested || (!busy && current.running))} onClick={() => void stop()}>{stopping ? '正在停止…' : '停止同步'}</button></div>
+    <header className="page-header">
+      <h1>采集与导出</h1>
+      <button id="refresh" className="button" type="button" disabled={busy || stopping} onClick={() => void action(async () => {await load(); notify('已刷新本地数据。');})}>刷新记录</button>
     </header>
     <p id="feedback" className={'feedback' + (feedback.error ? ' error' : '')} role={feedback.error ? 'alert' : 'status'} aria-live="polite" aria-atomic="true">{feedback.message}</p>
-    <section className="stat" aria-label="本地记录概览"><span>已记录对话</span><strong id="conversation-count">{db ? db.conversations.length : '—'}</strong></section>
-    <section className="coverage panel" aria-labelledby="coverage-title" aria-busy={busy} id="sync-panel">
-      <div className="section-heading"><h2 id="coverage-title">采集进度</h2><span id="sync-state" className="badge">{current.running ? '同步进行中' : current.complete ? '本次任务结束 · 覆盖有限' : entries.length ? '当前未在同步 · 覆盖待核实' : '暂无同步覆盖信息'}</span></div>
-      <div className="account-picker"><label htmlFor="account-select">查看账号</label><select id="account-select" disabled={busy || stopping || syncRequested || !db?.accounts.length} value={db?.account || ''} onChange={event => void selectAccount(event.target.value)}>{!db?.account && <option value="">{db ? '请选择账号' : '正在读取账号…'}</option>}{db?.accounts.map(account => <option key={account} value={account}>{account}</option>)}</select></div>
-      <p id="account">当前账号：{db ? text(db.account, '未提供账号标识') : '等待本地数据'}</p>
-      <p id="sync-progress">本次已处理 {text(current.processed, '—')} / {text(current.total, '—')} · 失败 {text(current.failed, '—')} · 更新于 {formatTime(current.updatedAt)}</p>
-      <p id="sync-message">覆盖说明：{describe(current.coverage)}{current.message ? '；' + describe(current.message) : ''}</p>
-      <p>采集范围取决于聊天页当前已加载的会话，不能保证覆盖全部记录。</p>
-      <details id="sync-details"><summary>查看同步信息</summary><dl id="sync-metadata" className="metadata">{entries.length ? entries.map(([key, value]) => <Fragment key={key}><dt>{names[key] || key}</dt><dd>{/At$/.test(key) ? formatTime(value) : describe(value)}</dd></Fragment>) : <><dt>覆盖情况</dt><dd>尚无同步元数据，无法确认采集范围与历史完整性。</dd></>}</dl></details>
-    </section>
-    <footer>记录保存在扩展本地。导出文件可能包含隐私信息，请妥善保管。</footer>
+    <div className="workspace">
+      <section className="account-panel" aria-labelledby="records-title" aria-busy={busy}>
+        <h2 id="records-title">本地记录</h2>
+        <div className="account-picker">
+          <label htmlFor="account-select">账号</label>
+          <select id="account-select" disabled={busy || stopping || syncRequested || !db?.accounts.length} value={db?.account || ''} onChange={event => void selectAccount(event.target.value)}>
+            {!db?.account && <option value="">{db ? '暂无可用账号' : '正在读取账号…'}</option>}
+            {db?.accounts.map(account => <option key={account} value={account}>{account}</option>)}
+          </select>
+        </div>
+        <dl className="local-count"><dt>已记录对话</dt><dd id="conversation-count">{db ? db.conversations.length : '—'}</dd></dl>
+        <button id="export" className="button export" type="button" disabled={busy || stopping || !db} onClick={() => void exportData()}>导出 JSON</button>
+        <p className="hint">导出文件可能包含聊天等隐私信息，请妥善保管。</p>
+      </section>
+
+      <section className="coverage" aria-labelledby="coverage-title" aria-busy={busy} id="sync-panel">
+        <div className="section-heading">
+          <h2 id="coverage-title">采集进度</h2>
+          <span id="sync-state" className="sync-state" data-running={!!current.running}>{syncState}</span>
+        </div>
+        <div id="sync-progress" className="progress-report">
+          <dl className="progress-counts">
+            <div><dt>本次已处理</dt><dd>{text(processed, '—')} <span>/ {text(total, '—')}</span></dd></div>
+            <div><dt>失败</dt><dd className={failed && failed > 0 ? 'failed' : undefined}>{text(failed, '—')}</dd></div>
+          </dl>
+          {progress && <progress aria-label="本次会话处理进度" {...progress} />}
+          <p>更新时间 {formatTime(current.updatedAt)}</p>
+        </div>
+        {current.message && <p className="coverage-note">{describe(current.message)}</p>}
+        <p id="sync-message" className="hint">采集范围取决于聊天页已加载的会话，可能只覆盖部分记录。</p>
+        <div className="actions">
+          <button id="sync" className="button primary" type="button" disabled={busy || stopping || !db || current.running} onClick={() => void sync()}>{syncRequested ? '正在请求采集…' : '更新采集'}</button>
+          <button id="stop-sync" className="button" type="button" disabled={stopping || !(syncRequested || (!busy && current.running))} onClick={() => void stop()}>{stopping ? '正在停止…' : '停止采集'}</button>
+        </div>
+        <details id="sync-details">
+          <summary>查看采集详情</summary>
+          <dl id="sync-metadata" className="metadata">{entries.length ? entries.map(([key, value]) => <Fragment key={key}><dt>{names[key] || key}</dt><dd>{/At$/.test(key) ? formatTime(value) : describe(value)}</dd></Fragment>) : <><dt>覆盖情况</dt><dd>暂无采集详情。</dd></>}</dl>
+        </details>
+      </section>
+    </div>
   </main>;
 }
 

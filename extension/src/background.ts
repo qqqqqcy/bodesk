@@ -1,9 +1,9 @@
 import type {ExternalRecord, Contributions, HumanMessagePreview} from './types.ts';
 type Change = [string, 'put' | 'delete', any];
 
-import {inferStatus, isHuman, mergeAutoContribution, mergeJob, validStatus} from './core.ts';
+import {inferStatus, isChatMessage, mergeAutoContribution, mergeJob, validStatus} from './core.ts';
 import {registerBuildReload} from './build-reload.ts';
-const DB_NAME='boss-local-helper', DB_VERSION=2, STATUS_SCHEMA=5;
+const DB_NAME='boss-local-helper', DB_VERSION=2, STATUS_SCHEMA=6;
 const SITE_ORIGINS=['https://www.zhipin.com','http://127.0.0.1:4173','http://localhost:4173'];
 const siteOrigin=(value?: string)=>{try{const url=new URL(value || '');return SITE_ORIGINS.includes(url.origin)?url.origin:null;}catch{return null;}};
 const sourceGroup=(value?: string)=>{const origin=siteOrigin(value);return !origin?null:origin===SITE_ORIGINS[0]?'real':'mock';};
@@ -323,7 +323,7 @@ async function latestJobMessages(account: string, related: ExternalRecord[], all
     const soleJob = jobIds.size === 1 ? jobIds.values().next().value : undefined;
     for (const message of await conversationMessages(conversationId)) {
       const jobId = message.jobId ? key(account, 'job:' + message.jobId) : soleJob;
-      if (!jobId || !jobIds.has(jobId) || !relevantJobIds.has(jobId) || !isHuman(message)) continue;
+      if (!jobId || !jobIds.has(jobId) || !relevantJobIds.has(jobId) || !isChatMessage(message)) continue;
       const text = typeof message.text === 'string' ? message.text.trim() : '';
       if (!text) continue;
       const time = earliest(message.time);

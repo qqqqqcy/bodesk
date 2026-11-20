@@ -8,7 +8,11 @@ const harness=sendMessage=>browserHarness(source,sendMessage);
 const visualHarness=(sendMessage,options)=>browserHarness(source,sendMessage,options);
 const find=(root,cls)=>root?.classList.contains(cls)?root:root?.querySelector('.'+cls)||undefined;
 const all=(root,cls)=>[...(root?.classList.contains(cls)?[root]:[]),...(root?.querySelectorAll('.'+cls)||[])];
-const currentStatus=h=>find(all(h.widget(),'bh-job').find(row=>row.getAttribute('aria-current')==='true'),'bh-job-status');
+const currentJob=h=>all(h.widget(),'bh-job').find(row=>row.getAttribute('aria-current')==='true');
+const currentStatus=h=>find(currentJob(h),'bh-job-status');
+const currentNote=h=>find(currentJob(h),'bh-job-note-edit');
+const statusOption=(h,value)=>all(currentJob(h),'bh-status-option').find(option=>option.value===value);
+const statusDialog=h=>find(currentJob(h),'bh-status-dialog');
 const rowTitles=h=>all(h.widget(),'bh-job').map(row=>find(row,'bh-job-title').textContent);
 const snapshot=(account='a',jobId='j1')=>({type:'SNAPSHOT',account,selectedId:'c1',rows:[{id:'c1',jobId,companyName:'示例公司',jobTitle:jobId==='j1'?'前端':'后端'}]});
 // The server returns the older JD first, while the current JD is the second row.
@@ -19,11 +23,11 @@ test('浮窗收起时隐藏内容，重新展开保留备注草稿，切换职�
   await h.deliver(snapshot());
   const toggle=find(h.widget(),'bh-widget-toggle');
   const body=h.document.getElementById(toggle.getAttribute('aria-controls'));
-  const company=find(h.widget(),'bh-company-line');
+  const company=find(h.widget(),'bh-company');
   assert.equal(toggle.getAttribute('aria-expanded'),'true');
   assert.equal(body.hidden,false);
 
-  await currentStatus(h).emit('click');
+  await currentNote(h).emit('click');
   const input=find(h.widget(),'bh-note-input');
   input.value='未保存的备注';
   await input.emit('input');
@@ -108,7 +112,7 @@ test('浮窗按发送方显示人工消息预览并保留完整的纯文本', as
   assert.equal(outgoing.querySelector('img'), null);
 });
 
-test('浮窗可手动选择拒绝沟通，保存后展示手动标识并可恢复自动',async()=>{
+test('点击状态直接显示选项，确认后才保存手动状态或恢复自动',async()=>{
   const sent=[],d=data();
   const h=visualHarness(async message=>{
     sent.push(message);
@@ -117,14 +121,27 @@ test('浮窗可手动选择拒绝沟通，保存后展示手动标识并可恢�
     return{ok:true,data:d};
   });
   await h.deliver(snapshot());await currentStatus(h).emit('click');
-  let select=find(h.widget(),'bh-status-select');
-  assert.equal([...select.children].find(option=>option.value==='communication_rejected').textContent,'对方拒绝沟通');
-  select.value='communication_rejected';await select.emit('change');await find(h.widget(),'bh-editor').emit('submit');
+  const reject=statusOption(h,'communication_rejected');
+  assert.equal(reject.textContent,'对方拒绝沟通');
+  assert.equal(currentStatus(h).getAttribute('aria-expanded'),'true');
+  await reject.emit('click');
+  assert.equal(statusDialog(h).open,true);
+  assert.match(statusDialog(h).textContent,/前端.*对方拒绝沟通/);
+  assert.ok(!sent.some(message=>message.type==='SAVE_JOB'));
+  await find(statusDialog(h),'bh-cancel').emit('click');
+  assert.equal(statusDialog(h),undefined);
+  assert.ok(!sent.some(message=>message.type==='SAVE_JOB'));
+  assert.equal(currentStatus(h).textContent,'附件简历请求已发送');
+  await statusOption(h,'communication_rejected').emit('click');
+  await find(statusDialog(h),'bh-save').emit('click');
   assert.equal(sent.find(message=>message.type==='SAVE_JOB').status,'communication_rejected');
+  assert.equal(statusDialog(h),undefined);
   assert.equal(currentStatus(h).textContent,'对方拒绝沟通（手动）');
   await h.tick();assert.equal(currentStatus(h).textContent,'对方拒绝沟通（手动）');
-  await currentStatus(h).emit('click');select=find(h.widget(),'bh-status-select');assert.equal(select.value,'communication_rejected');
-  select.value='auto';await select.emit('change');await find(h.widget(),'bh-editor').emit('submit');
+  await currentStatus(h).emit('click');assert.equal(statusOption(h,'communication_rejected').disabled,true);
+  await statusOption(h,'auto').emit('click');
+  assert.match(statusDialog(h).textContent,/跟随自动判断/);
+  await find(statusDialog(h),'bh-save').emit('click');
   assert.equal(currentStatus(h).textContent,'附件简历请求已发送');
 });
 
@@ -151,7 +168,7 @@ test('编辑草稿时不执行删除，临时未入库的JD不能删除',async()
   await h.deliver(snapshot());
   let rows=all(h.widget(),'bh-job');assert.equal(find(rows[0],'bh-job-delete').disabled,true);
   d.jobs[0].persisted=true;await h.deliver({type:'CONVERSATION',account:'a',row:{id:'c1'}});
-  await currentStatus(h).emit('click');const input=find(h.widget(),'bh-note-input');input.value='未保存草稿';await input.emit('input');
+  await currentNote(h).emit('click');const input=find(h.widget(),'bh-note-input');input.value='未保存草稿';await input.emit('input');
   rows=all(h.widget(),'bh-job');await find(rows[0],'bh-job-delete').emit('click');
   assert.ok(!sent.some(message=>message.type==='DELETE_JOB'));assert.equal(find(h.widget(),'bh-note-input').value,'未保存草稿');assert.match(find(h.widget(),'bh-notice').textContent,/请先保存或取消/);
 });
@@ -182,7 +199,7 @@ test('职位页浮窗只读展示已有公司记录，高亮当前JD并禁止编
   assert.equal(sent.find(message=>message.type==='WIDGET_GET').preview,true);
   assert.deepEqual(rowTitles(h),['后端','前端']);
   assert.equal(currentStatus(h).disabled,true);
-  assert.equal(find(h.widget(),'bh-company-line').children[1].disabled,true);
+  assert.equal(find(h.widget(),'bh-company-note-edit').disabled,true);
   assert.equal(find(h.widget(),'bh-job-note-edit'),undefined);
   assert.equal(find(h.widget(),'bh-notice').hidden,true);
   assert.doesNotMatch(h.widget().textContent,/仅查看|不会新增|当前浏览|当前 JD 已记录/);
@@ -234,54 +251,102 @@ test('浮窗展示最新简历系统提示，人工状态仍优先',async()=>{
   await h.deliver(snapshot());assert.equal(currentStatus(h).textContent,'附件简历请求已发送');
   manual=true;await h.deliver({type:'CONVERSATION',account:'a',row:{id:'c1'}});assert.equal(currentStatus(h).textContent,'面试中（手动）');
 });
-test('浮窗同时保存JD状态与备注，自动刷新和摄取不丢编辑内容',async()=>{
+test('状态确认独立于备注编辑，切换入口保留备注草稿',async()=>{
   const d=data(),sent=[];let reads=0;
-  const h=visualHarness(async message=>{sent.push(message);if(message.type==='INGEST')return{ok:true};if(message.type==='SAVE_JOB'){d.jobs[1]={...d.jobs[1],status:message.status,manual:true,note:message.note};return{ok:true};}reads++;return{ok:true,data:d};});
-  await h.deliver(snapshot());await currentStatus(h).emit('click');
-  const form=find(h.widget(),'bh-editor'),input=find(form,'bh-note-input'),select=find(form,'bh-status-select');
-  input.value='面试需要准备 <script>示例</script>';await input.emit('input');assert.equal([...select.children].filter(o=>o.value==='interviewing').length,1);assert.ok(![...select.children].some(o=>/^interview_/.test(o.value)));select.value='interviewing';await select.emit('change');
+  const h=visualHarness(async message=>{
+    if(message.type==='INGEST')return{ok:true};
+    if(message.type==='SAVE_JOB'){
+      sent.push(message);
+      if(Object.hasOwn(message,'status'))Object.assign(d.jobs[1],{status:message.status,manual:true});
+      if(Object.hasOwn(message,'note'))d.jobs[1].note=message.note;
+      return{ok:true};
+    }
+    reads++;return{ok:true,data:d};
+  });
+  await h.deliver(snapshot());
+  await currentNote(h).emit('click');
+  const input=find(h.widget(),'bh-note-input');
+  const note='面试需要准备 <script>示例</script>';
+  assert.equal(find(h.widget(),'bh-status-picker'),undefined);
+  input.value=note;await input.emit('input');
   h.tick();await h.deliver({type:'CONVERSATION',account:'a',row:{id:'c1'}});
-  assert.equal(reads,1);assert.equal(find(h.widget(),'bh-note-input'),input);assert.match(input.value,/面试需要准备/);
-  await form.emit('submit');const save=sent.find(m=>m.type==='SAVE_JOB');
-  assert.equal(save.account,'a');assert.equal(save.jobId,'j1');assert.equal(save.status,'interviewing');assert.equal(save.note,input.value);
-  assert.equal(find(h.widget(),'bh-editor'),undefined);assert.ok(h.widget().textContent.includes(input.value));assert.match(currentStatus(h).textContent,/面试中/);
+  assert.equal(reads,1);assert.equal(find(h.widget(),'bh-note-input'),input);assert.equal(input.value,note);
+
+  await currentStatus(h).emit('click');
+  const options=all(currentJob(h),'bh-status-option');
+  assert.equal(find(h.widget(),'bh-note-input'),undefined);
+  assert.equal(find(currentJob(h),'bh-note-text').textContent,'职位原备注');
+  assert.equal(options.filter(option=>option.value==='interviewing').length,1);
+  assert.ok(!options.some(option=>/^interview_/.test(option.value)));
+  await statusOption(h,'interviewing').emit('click');
+  await find(statusDialog(h),'bh-save').emit('click');
+  assert.equal(sent[0].account,'a');assert.equal(sent[0].jobId,'j1');assert.equal(sent[0].status,'interviewing');
+  assert.ok(!Object.hasOwn(sent[0],'note'));assert.equal(d.jobs[1].note,'职位原备注');
+
+  await currentNote(h).emit('click');
+  assert.equal(find(h.widget(),'bh-note-input').value,note);
+  await find(h.widget(),'bh-editor').emit('submit');
+  assert.equal(sent[1].note,note);assert.ok(!Object.hasOwn(sent[1],'status'));
+  assert.equal(find(h.widget(),'bh-editor'),undefined);assert.ok(h.widget().textContent.includes(note));assert.match(currentStatus(h).textContent,/面试中/);
 });
 test('只改状态不回写旧备注，只改备注不回写旧状态',async()=>{
   const d=data(),sent=[];
   const h=visualHarness(async m=>{if(m.type==='INGEST')return{ok:true};if(m.type==='SAVE_JOB'){sent.push(m);if(Object.hasOwn(m,'status')){d.jobs[1].status=m.status;d.jobs[1].manual=true;}if(Object.hasOwn(m,'note'))d.jobs[1].note=m.note;return{ok:true};}return{ok:true,data:d};});
   await h.deliver(snapshot());await currentStatus(h).emit('click');
-  d.jobs[1].note='其他页面的新备注';let select=find(h.widget(),'bh-status-select');select.value='interviewing';await select.emit('change');await find(h.widget(),'bh-editor').emit('submit');
+  d.jobs[1].note='其他页面的新备注';await statusOption(h,'interviewing').emit('click');await find(statusDialog(h),'bh-save').emit('click');
   assert.ok(!Object.hasOwn(sent[0],'note'));assert.equal(sent[0].expectedManualStatus,null);assert.equal(d.jobs[1].note,'其他页面的新备注');
-  await currentStatus(h).emit('click');d.jobs[1].status='passed';let input=find(h.widget(),'bh-note-input');input.value='只修改备注';await input.emit('input');await find(h.widget(),'bh-editor').emit('submit');
+  await currentNote(h).emit('click');d.jobs[1].status='passed';let input=find(h.widget(),'bh-note-input');input.value='只修改备注';await input.emit('input');await find(h.widget(),'bh-editor').emit('submit');
   assert.ok(!Object.hasOwn(sent[1],'status'));assert.equal(sent[1].expectedNote,'其他页面的新备注');assert.equal(d.jobs[1].status,'passed');
 });
 test('旧保存响应不能删除切换回来后继续输入的新草稿',async()=>{
   const d=data(),sent=[];let complete;
   const h=visualHarness(async m=>{if(m.type==='INGEST')return{ok:true};if(m.type==='SAVE_JOB'){sent.push(m);if(sent.length===1)return new Promise(resolve=>{complete=()=>{d.jobs[1].note=m.note;resolve({ok:true});};});d.jobs[1].note=m.note;return{ok:true};}return{ok:true,data:d};});
-  await h.deliver(snapshot());await currentStatus(h).emit('click');let input=find(h.widget(),'bh-note-input');input.value='先提交的备注';await input.emit('input');const saving=find(h.widget(),'bh-editor').emit('submit');
-  await h.deliver({type:'SNAPSHOT',account:'a',selectedId:null,rows:[]});await h.deliver(snapshot());await currentStatus(h).emit('click');input=find(h.widget(),'bh-note-input');input.value='返回后继续输入的新草稿';await input.emit('input');
+  await h.deliver(snapshot());await currentNote(h).emit('click');let input=find(h.widget(),'bh-note-input');input.value='先提交的备注';await input.emit('input');const saving=find(h.widget(),'bh-editor').emit('submit');
+  await h.deliver({type:'SNAPSHOT',account:'a',selectedId:null,rows:[]});await h.deliver(snapshot());await currentNote(h).emit('click');input=find(h.widget(),'bh-note-input');input.value='返回后继续输入的新草稿';await input.emit('input');
   complete();await saving;assert.equal(find(h.widget(),'bh-note-input').value,'返回后继续输入的新草稿');
   await h.deliver({type:'CONVERSATION',account:'a',row:{id:'c1'}});await find(h.widget(),'bh-editor').emit('submit');
   assert.equal(sent[1].expectedNote,'先提交的备注');assert.equal(d.jobs[1].note,'返回后继续输入的新草稿');
 });
-test('未修改时保存只关闭编辑器，不产生写操作',async()=>{
+test('当前状态不能重复选择，未修改的备注也不产生写操作',async()=>{
   const sent=[],d=data();const h=visualHarness(async m=>{sent.push(m);return m.type==='INGEST'?{ok:true}:{ok:true,data:d};});
-  await h.deliver(snapshot());await currentStatus(h).emit('click');await find(h.widget(),'bh-editor').emit('submit');
+  await h.deliver(snapshot());await currentStatus(h).emit('click');
+  assert.equal(statusOption(h,'auto').disabled,true);
+  await statusOption(h,'auto').emit('click');assert.equal(statusDialog(h),undefined);
+  await currentNote(h).emit('click');await find(h.widget(),'bh-editor').emit('submit');
   assert.equal(find(h.widget(),'bh-editor'),undefined);assert.ok(!sent.some(m=>m.type==='SAVE_JOB'));
+});
+
+test('状态更新失败时确认弹窗保留选项，允许重试',async()=>{
+  const d=data();let attempts=0;
+  const h=visualHarness(async message=>{
+    if(message.type==='INGEST')return{ok:true};
+    if(message.type==='SAVE_JOB'){
+      if(++attempts===1)return{ok:false,error:'模拟状态保存失败'};
+      Object.assign(d.jobs[1],{status:message.status,manual:true});return{ok:true};
+    }
+    return{ok:true,data:d};
+  });
+  await h.deliver(snapshot());await currentStatus(h).emit('click');await statusOption(h,'interviewing').emit('click');
+  await find(statusDialog(h),'bh-save').emit('click');
+  assert.equal(statusDialog(h).open,true);
+  assert.equal(statusDialog(h).querySelector('[role="alert"]').textContent,'模拟状态保存失败');
+  assert.equal(currentStatus(h).textContent,'附件简历请求已发送');
+  await find(statusDialog(h),'bh-save').emit('click');
+  assert.equal(statusDialog(h),undefined);assert.equal(currentStatus(h).textContent,'面试中（手动）');
 });
 test('公司备注单独保存，JD备注不受影响',async()=>{
   const d=data(),sent=[];
   const h=visualHarness(async m=>{sent.push(m);if(m.type==='INGEST')return{ok:true};if(m.type==='SAVE_COMPANY_NOTE'){d.companyNote=m.note;return{ok:true};}return{ok:true,data:d};});
-  await h.deliver(snapshot());await find(h.widget(),'bh-company-line').children[1].emit('click');
+  await h.deliver(snapshot());await find(h.widget(),'bh-company-note-edit').emit('click');
   const form=find(h.widget(),'bh-editor'),input=find(form,'bh-note-input');input.value='公司沟通偏好';await input.emit('input');await form.emit('submit');
   const save=sent.find(m=>m.type==='SAVE_COMPANY_NOTE');assert.equal(save.companyId,'company-a');assert.equal(save.account,'a');assert.equal(save.note,'公司沟通偏好');
   assert.equal(d.jobs[1].note,'职位原备注');assert.ok(h.widget().textContent.includes('公司沟通偏好'));
 });
 test('保存失败保留草稿，切换上下文后返回可继续编辑',async()=>{
   const d=data();const h=visualHarness(async m=>m.type==='INGEST'?{ok:true}:m.type==='SAVE_JOB'?{ok:false,error:'模拟保存失败'}:{ok:true,data:d});
-  await h.deliver(snapshot());await currentStatus(h).emit('click');let input=find(h.widget(),'bh-note-input');input.value='未保存草稿';await input.emit('input');
+  await h.deliver(snapshot());await currentNote(h).emit('click');let input=find(h.widget(),'bh-note-input');input.value='未保存草稿';await input.emit('input');
   await find(h.widget(),'bh-editor').emit('submit');assert.equal(find(h.widget(),'bh-note-input').value,'未保存草稿');assert.equal(find(h.widget(),'bh-save').disabled,false);assert.match(find(h.widget(),'bh-editor-feedback').textContent,/失败/);
-  await h.deliver({type:'SNAPSHOT',account:'a',selectedId:null,rows:[]});await h.deliver(snapshot());await currentStatus(h).emit('click');
+  await h.deliver({type:'SNAPSHOT',account:'a',selectedId:null,rows:[]});await h.deliver(snapshot());await currentNote(h).emit('click');
   assert.equal(find(h.widget(),'bh-note-input').value,'未保存草稿');
 });
 test('content 在后台返回后转发关联 ACK，异常也回传失败',async()=>{

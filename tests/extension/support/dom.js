@@ -15,6 +15,8 @@ export function browserHarness(source, sendMessage, {confirm = () => true, url =
   window.addEventListener = (name, handler, options) => {if (name === 'message') listener = handler; addListener(name, handler, options);};
   window.postMessage = event => output.push(event.data);
   window.confirm = confirm;
+  window.HTMLDialogElement.prototype.showModal ??= function() {this.open = true;};
+  window.HTMLDialogElement.prototype.close ??= function() {this.open = false;};
   window.setInterval = handler => {tick = handler; return 1;};
   window.chrome = {storage, runtime: {sendMessage: message => {
     const promise = Promise.resolve(sendMessage(structuredClone(message))).then(value => structuredClone(value));

@@ -4,13 +4,25 @@ export const BASE_STATUSES = ['unknown','unread','read','greeting_unread','greet
 export const validStatus = (value: string) => BASE_STATUSES.includes(value);
 
 // Legacy values remain comparable when reading contributions saved by older versions.
-const priorities: Record<string, number> = {unknown:0,unread:1,read:1,greeting_unread:1,greeting_read:1,awaiting_self:1,awaiting_boss:1,resume_requested:2,resume_applied:3,resume_sent:3,resume_viewed:3,resume_event:3};
-const priorityOf = (value?: Contribution) => typeof value?.priority==='number'&&Number.isInteger(value.priority)&&value.priority>=0&&value.priority<=3?value.priority:(priorities[value?.status || 'unknown'] ?? 0);
+const priorities: Record<string, number> = {unknown:0,unread:1,read:1,greeting_unread:1,greeting_read:1,awaiting_self:1,awaiting_boss:1,resume_requested:2,resume_applied:3,resume_sent:3,resume_viewed:3,resume_event:3,interviewing:4};
+const priorityOf = (value?: Contribution) => typeof value?.priority==='number'&&Number.isInteger(value.priority)&&value.priority>=0&&value.priority<=4?value.priority:(priorities[value?.status || 'unknown'] ?? 0);
 const timeOf = (value?: Contribution) => Number.isFinite(Number(value?.observedAt)) ? Number(value?.observedAt) : 0;
 const messageTime = (m: MessageRecord) => Number.isFinite(Number(m.time)) ? Number(m.time) : 0;
 const isSystem = (m: MessageRecord) => m.isSystem !== false && (m.isSystem === true || Number(m.type) === 1 && Number(m.bodyType) === 4 || [3,4].includes(Number(m.type)) && Number(m.bodyType) === 1 && Number(m.templateId) === 3);
 const isWithdrawn = (text: unknown) => /(?:撤回了一条消息|撤回了一条|消息已撤回|已撤回一条消息|撤回了消息)/.test(String(text||''));
-export const isHuman = (m: MessageRecord) => !isSystem(m) && !isWithdrawn(m.text) && (m.isSystem === false || (m.type == null && m.bodyType == null) || ([1,3].includes(Number(m.type)) && Number(m.bodyType) === 1 && Number(m.templateId) !== 3) || (Number(m.type) === 1 && Number(m.bodyType) === 7));
+const isInterviewCard = (message: MessageRecord) => message.messageType === 'interview' || (Number(message.type) === 3 && Number(message.bodyType) === 14 && Number(message.templateId) === 1);
+const isHuman = (m: MessageRecord) => !isInterviewCard(m) && !isSystem(m) && !isWithdrawn(m.text) && (m.isSystem === false || (m.type == null && m.bodyType == null) || ([1,3].includes(Number(m.type)) && Number(m.bodyType) === 1 && Number(m.templateId) !== 3) || (Number(m.type) === 1 && Number(m.bodyType) === 7));
+
+export function isChatMessage(message: MessageRecord) {
+  if (!isHuman(message)) return false;
+  if (message.messageType && !['text', 'image'].includes(message.messageType)) return false;
+  if (message.bodyType == null) return true;
+  const bodyType = Number(message.bodyType);
+  const type = Number(message.type);
+  const templateId = Number(message.templateId);
+  if (bodyType === 1) return !(type === 1 && templateId === 5) && !([3, 4].includes(type) && templateId === 3);
+  return bodyType === 3;
+}
 const questionable = (text: string) => /(?:不想|不需要|不要|无需|不用|不必|不能|无法|未|没有|没|尚未|取消|失败|并非|不是|别|如果|假如|例如|比如|[“”「」『』"'])/.test(text);
 
 function resumeLabel(text: unknown) {
@@ -44,8 +56,32 @@ function isRequest(m: MessageRecord) {
     return /(?:请求|希望|想要|需要|索要).{0,12}(?:附件简历|发(?:送)?(?:一份|一下|你的|您的)*简历)|(?:请|麻烦|方便|可以|能否|能不能).{0,12}(?:发|发送|提供).{0,12}(?:附件|简历)|^(?:请)?发(?:送)?(?:一份|一下|你的|您的)*简历$|(?:发|发送).{0,8}附件简历/.test(text);
   });
 }
+function interviewCardState(message: MessageRecord) {
+  if (!isInterviewCard(message)) return;
+  const text = String(message.text || '').trim();
+  if (isWithdrawn(text)) return;
+  if (/(?:已(?:取消|拒绝|撤销)|(?:取消|拒绝|撤销)了)(?:本次|您的|你的|对方的)?面试|面试(?:邀请|邀约)?(?:已取消|已拒绝|已撤销|已过期|已失效)/.test(text)) return 'closed';
+  if (/邀请(?:您|你|对方)(?:参加)?(?:线上|线下|视频|电话|现场)?面试/.test(text) || /^(?:(?:您|你|我|对方)?已?(?:接受|同意|确认)(?:了)?面试(?:邀请|邀约)|面试邀请|面试邀约|面试已确认)(?:$|[\s，。！])/.test(text)) return 'active';
+}
+
 export function inferStatus(row: ConversationRecord={}, messages: MessageRecord[]=[]): Contribution {
-  const ordered=[...messages].sort((a,b)=>messageTime(b)-messageTime(a)), resumeEvents=[];
+  const ordered = [...messages].sort((a, b) => messageTime(b) - messageTime(a));
+  let latestInterview: {state: 'active' | 'closed'; time: number; text: string} | undefined;
+  for (const message of ordered) {
+    const state = interviewCardState(message);
+    if (!state) continue;
+    const time = messageTime(message);
+    if (!latestInterview || (latestInterview.time === time && state === 'closed')) latestInterview = {state, time, text: String(message.text).trim()};
+  }
+  if (latestInterview?.state === 'active') return {status:'interviewing',label:'面试中',observedAt:latestInterview.time,evidence:'面试卡片：'+latestInterview.text.slice(0,300),priority:4};
+  const preview = String(row.lastText || '').trim();
+  const cardPreview = preview && ordered.some(message => isInterviewCard(message) && String(message.text || '').split('\n').some(line => line.trim() === preview));
+  const fallback = inferCommunicationStatus(cardPreview ? {...row,lastText:''} : row, ordered);
+  return latestInterview ? {...fallback, interviewClosedAt:latestInterview.time} : fallback;
+}
+
+function inferCommunicationStatus(row: ConversationRecord, ordered: MessageRecord[]): Contribution {
+  const resumeEvents=[];
   for (const m of ordered) {
     const label=isSystem(m) && resumeLabel(m.text);
     if (label) resumeEvents.push({status:'resume_event',label,observedAt:messageTime(m),evidence:'系统消息：'+label,priority:3});
@@ -93,7 +129,11 @@ export function mergeJob(previous: JobRecord | null | undefined, incoming: JobRe
   if(result.autoContributions){
     let inferred: Contribution={status:'unknown',label:'未知',observedAt:0,evidence:'缺少足够状态证据',priority:0};
     const candidates=[];
-    for(const contribution of Object.values(result.autoContributions))for(const source of ['verified','unverified'] as const)if(contribution?.[source])candidates.push(contribution[source]);
+    for (const contribution of Object.values(result.autoContributions)) {
+      const messages = [contribution?.verified, contribution?.unverified].filter((value): value is Contribution => !!value);
+      const closedAt = Math.max(-Infinity, ...messages.map(value => value.interviewClosedAt ?? -Infinity));
+      candidates.push(...messages.filter(value => value.status !== 'interviewing' || timeOf(value) > closedAt));
+    }
     for(const candidate of candidates)if(priorityOf(candidate)>priorityOf(inferred) || priorityOf(candidate)===priorityOf(inferred) && timeOf(candidate)>timeOf(inferred))inferred=candidate;
     if(priorityOf(inferred)===3){
       const different=(c: Contribution)=>c.status!==inferred.status||c.label!==inferred.label||c.status==='unknown'&&c.evidence!==inferred.evidence;

@@ -1,46 +1,342 @@
-#boss-local-helper-widget{position:fixed;right:18px;bottom:18px;z-index:2147483646;box-sizing:border-box;width:360px;max-width:calc(100vw - 32px);max-height:calc(100vh - 36px);overflow:auto;padding:14px;border:1px solid #c8d4d5;border-radius:14px;background:#fff;color:#233a3c;box-shadow:0 5px 28px #133a3c22;font:13px/1.6 system-ui,sans-serif;text-align:left}
-#boss-local-helper-widget .bh-widget-header{display:flex;align-items:flex-start;gap:10px}
-#boss-local-helper-widget .bh-widget-drag{display:grid;place-items:center;flex:none;width:28px;height:28px;border-radius:7px;color:#53686a;font-size:20px;line-height:1;cursor:grab;touch-action:none;user-select:none}
-#boss-local-helper-widget .bh-widget-drag:hover{background:#e4f4f1}
-#boss-local-helper-widget .bh-widget-drag:active{cursor:grabbing}
-#boss-local-helper-widget .bh-company-line{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex:1;min-width:0}
-#boss-local-helper-widget .bh-widget-body{margin-top:10px}
-#boss-local-helper-widget .bh-company{display:block;min-width:0;font-size:15px;line-height:1.5;overflow-wrap:anywhere}
-#boss-local-helper-widget .bh-jobs{max-height:min(420px,55vh);overflow-y:auto;overscroll-behavior:contain}
-#boss-local-helper-widget .bh-job{margin:4px 0;padding:9px 10px;border-left:3px solid transparent;border-radius:7px;background:#f5f7f7}
-#boss-local-helper-widget .bh-job-line{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
-#boss-local-helper-widget .bh-job-title{min-width:0;flex:1;overflow-wrap:anywhere}
-#boss-local-helper-widget button{font:inherit;cursor:pointer}
-#boss-local-helper-widget button:disabled{opacity:.55;cursor:default}
-#boss-local-helper-widget .bh-job-status{flex:0 1 48%;margin:0;padding:0 0 2px;border:0;border-bottom:1px dashed #a5b9b8;border-radius:0;background:transparent;font-size:12px;color:#53686a;text-align:right;overflow-wrap:anywhere;line-height:1.6}
-#boss-local-helper-widget .bh-job-status:hover{color:#087f80}
-#boss-local-helper-widget .bh-current{border-left-color:#087f80;background:#e4f4f1;box-shadow:inset 0 0 0 1px #a7d8cd}
-#boss-local-helper-widget .bh-current .bh-job-title{font-weight:700;color:#075b59}
-#boss-local-helper-widget .bh-current .bh-job-status{color:#075b59;font-weight:600}
-#boss-local-helper-widget .bh-link-button{margin:0;padding:0;border:0;background:transparent;color:#087f80;font-size:12px;line-height:1.6;white-space:nowrap;text-decoration:underline;text-underline-offset:3px}
-#boss-local-helper-widget .bh-job-note-edit{display:block;margin-top:5px}
-#boss-local-helper-widget .bh-message-preview{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px;align-items:start;margin-top:6px;padding:4px 6px;border-radius:6px;background:#fff;color:#3e5355;font-size:12px}
-#boss-local-helper-widget .bh-message-sender{padding:0 5px;border-radius:4px;background:#eef0f1;color:#485355;font-weight:600;white-space:nowrap}
-#boss-local-helper-widget .bh-message-out .bh-message-sender{background:#e0f3ef;color:#075e55}
-#boss-local-helper-widget .bh-message-in .bh-message-sender{background:#efe8fa;color:#513578}
-#boss-local-helper-widget .bh-message-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#boss-local-helper-widget .bh-message-preview:is(:hover,:focus) .bh-message-text{max-height:8em;overflow:auto;overflow-wrap:anywhere;white-space:pre-wrap;overscroll-behavior:contain}
-#boss-local-helper-widget .bh-note-text{margin:6px 0 8px;max-height:6em;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:#53686a;font-size:12px}
-#boss-local-helper-widget .bh-note-history summary{font-size:12px;color:#53686a;cursor:pointer;margin-top:6px}
-#boss-local-helper-widget .bh-notice,#boss-local-helper-widget .bh-editor-feedback{margin:8px 0;color:#657a7c;font-size:12px;overflow-wrap:anywhere}
-#boss-local-helper-widget [hidden]{display:none!important}
-#boss-local-helper-widget .bh-widget-toggle{flex:none;min-height:28px;padding:3px 9px;border:1px solid #c8d4d5;border-radius:7px;background:#fff;color:#087f80;white-space:nowrap}
-#boss-local-helper-widget .bh-widget-toggle:hover{background:#e4f4f1}
-#boss-local-helper-widget:has(.bh-widget-toggle[aria-expanded="false"]){width:auto;padding:5px;border-radius:10px}
-#boss-local-helper-widget .bh-editor{margin:9px 0 4px;padding:10px;border:1px solid #c8dcd8;border-radius:8px;background:#fff}
-#boss-local-helper-widget .bh-field{display:flex;flex-direction:column;gap:4px;margin-bottom:9px;color:#53686a;font-size:12px}
-#boss-local-helper-widget select,#boss-local-helper-widget textarea{display:block;box-sizing:border-box;width:100%;min-width:0;padding:7px;border:1px solid #c8d4d5;border-radius:6px;background:#fff;color:#233a3c;font:13px/1.5 system-ui,sans-serif}
-#boss-local-helper-widget textarea{resize:vertical;min-height:80px}
-#boss-local-helper-widget .bh-editor-actions{display:flex;gap:8px}
-#boss-local-helper-widget .bh-save,#boss-local-helper-widget .bh-overview{border:0;border-radius:7px;padding:7px 12px;background:#087f80;color:#fff;font:inherit}
-#boss-local-helper-widget .bh-overview{margin-top:10px}
-#boss-local-helper-widget .bh-cancel{border:1px solid #c8d4d5;border-radius:7px;padding:6px 11px;background:#fff;color:#53686a}
-#boss-local-helper-widget :focus-visible{outline:2px solid #087f80;outline-offset:2px}
-@media(max-width:650px){#boss-local-helper-widget{right:8px;bottom:8px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);padding:12px}#boss-local-helper-widget .bh-job-line{gap:8px}#boss-local-helper-widget .bh-job{padding:8px}}
-#boss-local-helper-widget a.bh-job-title{color:inherit;text-decoration:underline;text-underline-offset:3px}#boss-local-helper-widget a.bh-job-title:hover{color:#087f80}#boss-local-helper-widget .bh-favorite{display:inline-block;margin-top:5px;padding:1px 6px;border:1px solid #d6c38d;border-radius:4px;background:#fff8e6;color:#806216;font-size:11px}
-#boss-local-helper-widget .bh-controls,#boss-local-helper-widget .bh-job-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}#boss-local-helper-widget .bh-controls{margin-top:10px}#boss-local-helper-widget .bh-controls .bh-overview{margin-top:0}#boss-local-helper-widget .bh-job-actions{margin-top:5px}#boss-local-helper-widget .bh-job-actions .bh-job-note-edit{margin-top:0}#boss-local-helper-widget .bh-job-delete{color:#9c3935}
+#boss-local-helper-widget {
+  --bh-surface: #fff;
+  --bh-wash: #f5f6f5;
+  --bh-ink: #202522;
+  --bh-secondary: #434b46;
+  --bh-muted: #59635d;
+  --bh-line: #dce1dd;
+  --bh-control-line: #828d85;
+  --bh-accent: #07664f;
+  --bh-accent-hover: #045541;
+  --bh-selection: #edf5f0;
+  --bh-danger: #97392f;
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483646;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 376px;
+  max-width: calc(100vw - 32px);
+  max-height: min(612px, calc(100dvh - 32px));
+  overflow: hidden;
+  isolation: isolate;
+  color-scheme: light;
+  border: 1px solid var(--bh-line);
+  border-radius: 12px;
+  background: var(--bh-surface);
+  color: var(--bh-ink);
+  box-shadow: 0 4px 20px rgb(0 0 0 / 14%);
+  font: 13px/1.55 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+
+#boss-local-helper-widget *, #boss-local-helper-widget *::before, #boss-local-helper-widget *::after { box-sizing: border-box; }
+#boss-local-helper-widget [hidden] { display: none !important; }
+
+#boss-local-helper-widget .bh-widget-header {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px;
+  border-bottom: 1px solid var(--bh-line);
+  background: var(--bh-surface);
+}
+
+#boss-local-helper-widget:has(.bh-widget-toggle[aria-expanded="false"]) { width: auto; }
+#boss-local-helper-widget .bh-widget-header:has(.bh-widget-toggle[aria-expanded="false"]) { padding: 4px; border: 0; }
+
+#boss-local-helper-widget .bh-widget-drag {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 32px;
+  border-radius: 8px;
+  color: var(--bh-muted);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+#boss-local-helper-widget .bh-widget-drag::before {
+  width: 8px;
+  height: 12px;
+  border-inline: 2px dotted currentColor;
+  content: "";
+}
+
+#boss-local-helper-widget .bh-widget-drag:hover { background: var(--bh-wash); }
+#boss-local-helper-widget .bh-widget-drag:active { cursor: grabbing; }
+
+#boss-local-helper-widget .bh-company {
+  flex: 1;
+  margin: 0;
+  padding-block: 4px;
+  min-width: 0;
+  color: var(--bh-ink);
+  font: inherit;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+#boss-local-helper-widget .bh-widget-body { display: flex; flex-direction: column; min-height: 0; }
+#boss-local-helper-widget .bh-records { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+#boss-local-helper-widget .bh-company-notes { padding: 4px 16px 8px; border-bottom: 1px solid var(--bh-line); background: var(--bh-wash); }
+#boss-local-helper-widget .bh-company-note-heading, #boss-local-helper-widget .bh-job-heading-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+#boss-local-helper-widget .bh-record-label { color: var(--bh-muted); font-size: 12px; }
+#boss-local-helper-widget .bh-company-notes > .bh-note-text { margin: 0; }
+#boss-local-helper-widget .bh-jobs { padding: 0 12px 4px; }
+
+#boss-local-helper-widget .bh-jobs-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 4px 8px;
+  color: var(--bh-muted);
+  font-size: 12px;
+}
+
+#boss-local-helper-widget .bh-jobs-heading h2 { margin: 0; color: var(--bh-secondary); font: inherit; font-weight: 600; }
+
+#boss-local-helper-widget .bh-job {
+  padding: 12px 8px 8px;
+  border-bottom: 1px solid var(--bh-line);
+}
+
+#boss-local-helper-widget .bh-job:last-child { border-bottom-color: transparent; }
+#boss-local-helper-widget .bh-job.bh-current {
+  padding-inline: 12px;
+  border: 1px solid var(--bh-line);
+  border-inline-start: 2px solid var(--bh-accent);
+  border-radius: 8px;
+  background: var(--bh-selection);
+}
+#boss-local-helper-widget .bh-current-label { display: block; margin-bottom: 4px; color: var(--bh-accent); font-size: 12px; font-weight: 600; }
+#boss-local-helper-widget .bh-job-heading { margin: 0; color: var(--bh-ink); font: inherit; font-size: 14px; font-weight: 550; overflow-wrap: anywhere; }
+#boss-local-helper-widget .bh-current .bh-job-heading { font-size: 16px; font-weight: 600; }
+#boss-local-helper-widget a.bh-job-title { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+#boss-local-helper-widget a.bh-job-title:hover { color: var(--bh-accent); }
+
+#boss-local-helper-widget button {
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+#boss-local-helper-widget button:disabled { cursor: default; }
+#boss-local-helper-widget button:disabled:not(.bh-job-status) { opacity: .55; }
+
+#boss-local-helper-widget .bh-widget-toggle, #boss-local-helper-widget .bh-overview,
+#boss-local-helper-widget .bh-save, #boss-local-helper-widget .bh-cancel {
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--bh-control-line);
+  border-radius: 8px;
+  background: var(--bh-surface);
+  color: var(--bh-secondary);
+  font-weight: 550;
+}
+
+#boss-local-helper-widget .bh-widget-toggle { flex: none; border-color: transparent; white-space: nowrap; }
+#boss-local-helper-widget .bh-widget-toggle:hover, #boss-local-helper-widget .bh-overview:hover,
+#boss-local-helper-widget .bh-cancel:hover:not(:disabled) { background: var(--bh-wash); }
+
+#boss-local-helper-widget .bh-job-line, #boss-local-helper-widget .bh-job-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 8px;
+}
+
+#boss-local-helper-widget .bh-job-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 2px 8px;
+  border: 1px solid var(--bh-control-line);
+  border-radius: 6px;
+  background: var(--bh-surface);
+  color: var(--bh-secondary);
+  font-size: 12px;
+  font-weight: 550;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+#boss-local-helper-widget .bh-job-status:not(:disabled)::after {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: translateY(-1px) rotate(45deg);
+  content: "";
+}
+#boss-local-helper-widget .bh-job-status[aria-expanded="true"]::after { transform: translateY(1px) rotate(225deg); }
+#boss-local-helper-widget .bh-job-status:disabled { padding-inline: 0; border-color: transparent; background: transparent; }
+#boss-local-helper-widget .bh-job-status:hover:not(:disabled),
+#boss-local-helper-widget .bh-job-status[aria-expanded="true"] { border-color: var(--bh-accent); color: var(--bh-accent); }
+#boss-local-helper-widget .bh-favorite { flex: none; color: var(--bh-muted); font-size: 12px; }
+
+#boss-local-helper-widget .bh-status-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 8px;
+  padding: 4px;
+  border: 1px solid var(--bh-line);
+  border-radius: 8px;
+  background: var(--bh-surface);
+}
+
+#boss-local-helper-widget .bh-status-option {
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--bh-ink);
+  font-size: 12px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+#boss-local-helper-widget .bh-status-option:hover:not(:disabled),
+#boss-local-helper-widget button.bh-status-option:disabled { background: var(--bh-wash); color: var(--bh-accent); opacity: 1; }
+#boss-local-helper-widget .bh-status-option span { margin-inline-start: 4px; font-size: 12px; white-space: nowrap; }
+
+#boss-local-helper-widget .bh-status-dialog {
+  width: min(360px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  padding: 16px;
+  border: 1px solid var(--bh-line);
+  border-radius: 12px;
+  background: var(--bh-surface);
+  color: var(--bh-ink);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 16%);
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+
+#boss-local-helper-widget .bh-status-dialog::backdrop { background: rgb(0 0 0 / 40%); }
+#boss-local-helper-widget .bh-status-dialog h3 { margin: 0; color: inherit; font: inherit; font-size: 16px; font-weight: 600; }
+#boss-local-helper-widget .bh-status-dialog p { margin: 8px 0 0; }
+#boss-local-helper-widget .bh-status-dialog .bh-status-error { color: var(--bh-danger); }
+#boss-local-helper-widget .bh-status-dialog .bh-editor-actions { justify-content: flex-end; margin-top: 16px; }
+
+#boss-local-helper-widget .bh-link-button {
+  min-height: 32px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--bh-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  text-underline-offset: 3px;
+}
+
+#boss-local-helper-widget .bh-link-button:hover:not(:disabled),
+#boss-local-helper-widget .bh-link-button:focus-visible { text-decoration: underline; }
+#boss-local-helper-widget .bh-company-note-edit, #boss-local-helper-widget .bh-job-note-edit { color: var(--bh-accent); font-weight: 550; }
+#boss-local-helper-widget .bh-job-delete { margin-inline-start: auto; color: var(--bh-muted); }
+#boss-local-helper-widget .bh-job-delete:hover:not(:disabled), #boss-local-helper-widget .bh-job-delete:focus-visible { color: var(--bh-danger); }
+
+#boss-local-helper-widget .bh-message-preview {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid var(--bh-line);
+  border-radius: 6px;
+  background: var(--bh-wash);
+  color: var(--bh-secondary);
+  font-size: 12px;
+}
+
+#boss-local-helper-widget .bh-message-sender { color: var(--bh-muted); font-weight: 550; white-space: nowrap; }
+#boss-local-helper-widget .bh-message-out .bh-message-sender { color: var(--bh-secondary); }
+#boss-local-helper-widget .bh-current .bh-message-preview { background: var(--bh-surface); }
+#boss-local-helper-widget .bh-message-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+#boss-local-helper-widget .bh-message-preview:is(:hover, :focus) .bh-message-text {
+  max-height: 8em;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  overscroll-behavior: contain;
+}
+
+#boss-local-helper-widget .bh-note-text, #boss-local-helper-widget .bh-notice,
+#boss-local-helper-widget .bh-editor-feedback, #boss-local-helper-widget .bh-note-history summary {
+  margin: 8px 0;
+  color: var(--bh-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+#boss-local-helper-widget .bh-note-text { max-height: 6em; overflow: auto; white-space: pre-wrap; }
+#boss-local-helper-widget .bh-notice { margin: 8px 12px; }
+#boss-local-helper-widget .bh-note-history summary { cursor: pointer; }
+#boss-local-helper-widget .bh-controls { display: flex; justify-content: flex-end; flex: none; padding: 8px 12px; border-top: 1px solid var(--bh-line); background: var(--bh-surface); }
+#boss-local-helper-widget .bh-records:not(:has(.bh-jobs, .bh-company-notes, .bh-notice:not([hidden]))) + .bh-controls { border-top: 0; }
+
+#boss-local-helper-widget .bh-editor {
+  margin: 8px 0 4px;
+  padding: 8px;
+  border: 1px solid var(--bh-line);
+  border-radius: 8px;
+  background: var(--bh-surface);
+}
+
+#boss-local-helper-widget .bh-field {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 8px;
+  color: var(--bh-muted);
+  font-size: 12px;
+}
+
+#boss-local-helper-widget textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--bh-control-line);
+  border-radius: 8px;
+  background: var(--bh-surface);
+  color: var(--bh-ink);
+  font: inherit;
+  font-size: 13px;
+}
+
+#boss-local-helper-widget textarea { min-height: 60px; resize: vertical; }
+#boss-local-helper-widget .bh-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+#boss-local-helper-widget .bh-save { border-color: var(--bh-accent); background: var(--bh-accent); color: #fff; }
+#boss-local-helper-widget .bh-save:hover:not(:disabled) { border-color: var(--bh-accent-hover); background: var(--bh-accent-hover); }
+#boss-local-helper-widget :focus-visible { outline: 2px solid var(--bh-accent); outline-offset: 2px; }
+
+@media (max-width: 650px) {
+  #boss-local-helper-widget {
+    right: 8px;
+    bottom: 8px;
+    max-width: calc(100vw - 16px);
+    max-height: min(520px, 68dvh);
+  }
+}

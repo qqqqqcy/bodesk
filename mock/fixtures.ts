@@ -188,15 +188,22 @@ export function switchJob(world: MockWorld, bossId: string) {
 export function appendMessage(world: MockWorld, bossId: string, {kind = 'text', text = ''} = {}) {
   const conversation = world.conversations.find(item => item.row.encryptBossId === bossId);
   if (!conversation) throw new Error('联系人不存在');
-  const outgoing = !['request_resume', 'view_resume', 'withdraw', 'unknown_resume', 'resume_failed'].includes(kind);
+  const outgoing = !['request_resume', 'view_resume', 'withdraw', 'unknown_resume', 'resume_failed', 'invite_interview', 'cancel_interview', 'competition_card', 'wechat_card'].includes(kind);
   const templates: Record<string, string> = {resume: '您的附件简历已发送给Boss', apply_resume: '附件简历请求已发送', request_resume: '希望获取您的附件简历', view_resume: '对方已查看了您的附件简历', withdraw: '对方撤回了一条消息', unknown_resume: '对方正在审核您的附件简历', resume_failed: '简历发送失败\n对方已拒绝您的简历'};
-  if (kind !== 'text' && !Object.hasOwn(templates, kind)) throw new Error('未知消息类型');
-  const content = kind === 'text' ? String(text).trim().slice(0, 2000) : templates[kind];
+  const interviewTemplates: Record<string, string> = {invite_interview: '模拟招聘方邀请您线上面试，请查收会议安排', accept_interview: '接受了面试邀请', cancel_interview: '对方取消了面试'};
+  const platformTemplates: Record<string, string> = {competition_card: '你与该职位竞争者PK情况', wechat_card: '模拟联系人的微信号：mock_wechat'};
+  const interview = Object.hasOwn(interviewTemplates, kind);
+  if (kind !== 'text' && !Object.hasOwn(templates, kind) && !interview && !Object.hasOwn(platformTemplates, kind)) throw new Error('未知消息类型');
+  const content = kind === 'text' ? String(text).trim().slice(0, 2000) : (interview ? interviewTemplates[kind] : platformTemplates[kind] ?? templates[kind]);
   if (!content) throw new Error('消息不能为空');
   const system = ['resume', 'apply_resume', 'view_resume', 'unknown_resume', 'resume_failed'].includes(kind);
-  const body = kind === 'request_resume' ? {type: 7, text: '', dialog: {content}} : {type: system ? 4 : 1, text: content};
+  let body: MockMessage['body'] = {type: system ? 4 : 1, text: content};
+  if (interview) body = {type: 14, templateId: 1, text: content};
+  if (kind === 'request_resume') body = {type: 7, text: '', dialog: {content}};
+  if (kind === 'competition_card') body = {type: 16, templateId: 1, text: '', articles: [{title: content}]};
+  if (kind === 'wechat_card') body = {type: 1, templateId: 5, text: content};
   const time = Math.max(Date.now(), ...conversation.messages.map(message => (Number(message.time) || 0) + 1));
-  const message = {mid: String(world.nextId++), time, type: 1,
+  const message = {mid: String(world.nextId++), time, type: kind === 'competition_card' ? 4 : interview ? 3 : 1,
     from: {uid: outgoing ? world.user.userId : bossId}, to: {uid: outgoing ? bossId : world.user.userId},
     status: outgoing ? 1 : 2, body};
   conversation.messages.push(message);

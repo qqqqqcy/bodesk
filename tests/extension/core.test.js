@@ -5,6 +5,24 @@ import {inferStatus,mergeAutoContribution,mergeJob,validStatus} from '../../exte
 const msg=(text,time,extra={})=>({text,time,...extra});
 const system=(text,time,extra={})=>msg(text,time,{isSystem:true,...extra});
 
+test('平台面试邀约和接受卡片进入面试中，取消后恢复之前的沟通状态',()=>{
+  const card = (text,time,extra={}) => msg(text,time,{type:3,bodyType:14,templateId:1,...extra});
+  const resume = system('对方已查看了您的附件简历',10);
+  const invite = card('模拟招聘方邀请您线上面试，如需取消面试请联系招聘方',20,{direction:'in'});
+  const accepted = card('接受了面试邀请',30,{direction:'out',isSystem:false,messageType:'interview'});
+  const cancelled = card('对方取消了面试',40,{direction:'in',isSystem:false});
+  assert.equal(inferStatus({},[resume,invite]).status,'interviewing');
+  assert.equal(inferStatus({},[resume,invite,accepted]).observedAt,30);
+  assert.equal(inferStatus({lastText:cancelled.text,lastMessageAt:40,lastIsSelf:false},[invite,accepted,cancelled,resume]).status,'resume_event');
+  assert.equal(inferStatus({},[cancelled,card('模拟招聘方邀请您现场面试',50)]).status,'interviewing');
+  assert.equal(inferStatus({},[msg('您好，这边是线上面试，您有兴趣沟通么',10,{direction:'in',type:3,bodyType:1,templateId:1})]).status,'awaiting_self');
+  assert.equal(inferStatus({},[msg('接受了面试邀请',10,{direction:'out',type:1,bodyType:1,templateId:1})]).status,'awaiting_boss');
+  assert.equal(inferStatus({},[card('未接受面试邀请',10)]).status,'unknown');
+  const closed = {verified:inferStatus({},[invite]),unverified:inferStatus({},[cancelled,resume])};
+  assert.equal(mergeJob(null,{autoContributions:{sameContact:closed}}).status,'resume_event');
+  assert.equal(mergeJob(null,{autoContributions:{sameContact:closed,otherContact:{verified:inferStatus({},[accepted])}}}).status,'interviewing');
+});
+
 test('latest resume system event wins; ambiguous timestamp ties remain unknown',()=>{
   const viewed=system('对方已查看了您的附件简历',1);
   const sent=system('您的附件简历已发送给Boss',2);

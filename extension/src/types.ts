@@ -6,6 +6,7 @@ export interface Contribution {
   observedAt?: number;
   evidence?: string;
   priority?: number;
+  interviewClosedAt?: number;
 }
 
 export interface Contributions {
@@ -19,6 +20,7 @@ export interface MessageRecord {
   type?: number;
   bodyType?: number;
   templateId?: number;
+  messageType?: string;
   isSystem?: boolean | null;
   direction?: string;
 }

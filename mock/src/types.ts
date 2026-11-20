@@ -22,7 +22,7 @@ export interface MockMessage {
   from?: {uid: string};
   to?: {uid: string};
   status: number;
-  body: {type: number; text: string; dialog?: {title?: string; content?: string}; templateId?: number};
+  body: {type: number; text: string; dialog?: {title?: string; content?: string}; articles?: {title: string}[]; templateId?: number};
 }
 export interface MockConfig {
   scenario: string;

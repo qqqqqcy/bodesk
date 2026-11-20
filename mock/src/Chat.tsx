@@ -2,7 +2,7 @@ import {useEffect, useRef, useState} from 'react';
 import {api, errorText} from './api.ts';
 import type {MockConfig, MockMessage, MockRow} from './types.ts';
 
-const actions = {apply_resume: '申请发简历', resume: '发送简历', read: '对方已读', request_resume: '对方索要简历', view_resume: '对方查看简历', withdraw: '对方撤回消息', unknown_resume: '简历审核中', resume_failed: '简历发送失败 / 被拒绝', switch_job: '切换同公司 JD'};
+const actions = {apply_resume: '申请发简历', resume: '发送简历', read: '对方已读', request_resume: '对方索要简历', view_resume: '对方查看简历', withdraw: '对方撤回消息', unknown_resume: '简历审核中', resume_failed: '简历发送失败 / 被拒绝', invite_interview: '对方发面试邀请', accept_interview: '接受面试邀请', cancel_interview: '对方取消面试', competition_card: '竞争情况卡片', wechat_card: '微信交换卡片', switch_job: '切换同公司 JD'};
 export function Chat({config, notice}: {config: MockConfig; notice: (text: string) => void}) {
   const [rows, setRows] = useState<MockRow[]>([]);
   const [ended, setEnded] = useState(false);
@@ -70,7 +70,9 @@ export function Chat({config, notice}: {config: MockConfig; notice: (text: strin
           const isSelf = message.from?.uid === config.user.userId ? true : message.to?.uid === config.user.userId ? false : null;
           const isSystem = message.body.type === 4;
           const time = message.time ? new Date(message.time).toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'}) : '时间未知';
-          return <article key={message.mid} className={'message message-item ' + (isSelf ? 'out' : 'in') + (isSystem ? ' item-system' : '')} data-message-id={message.mid} ref={element => {if (element) element.__vue__ = {$props: {message: {mid: message.mid, time: message.time, type: message.type, bodyType: message.body.type, isSystem, isSelf, status: message.status, text: message.body.text, dialog: message.body.dialog}}};}}><span className="avatar">{isSelf ? '我' : row?.name.slice(0, 1)}</span><div className="message-body"><div className="bubble">{message.body.text || message.body.dialog?.content || ''}</div><div className="message-meta">{time}{isSelf ? message.status === 2 ? ' · 已读' : ' · 已送达' : ''}</div></div></article>;
+          const messageType = ({1: 'text', 7: 'dialog', 14: 'interview', 16: 'articles'} as Record<number, string>)[message.body.type];
+          const visibleText = message.body.text || message.body.dialog?.content || message.body.articles?.map(article => article.title).join('\n');
+          return <article key={message.mid} className={'message message-item ' + (isSelf ? 'out' : 'in') + (isSystem ? ' item-system' : '')} data-message-id={message.mid} ref={element => {if (element) element.__vue__ = {$props: {message: {mid: message.mid, time: message.time, type: message.type, bodyType: message.body.type, templateId: message.body.templateId, messageType, isSystem, isSelf, status: message.status, text: message.body.text, dialog: message.body.dialog, articles: message.body.articles}}};}}><span className="avatar">{isSelf ? '我' : row?.name.slice(0, 1)}</span><div className="message-body"><div className="bubble">{visibleText}</div><div className="message-meta">{time}{isSelf ? message.status === 2 ? ' · 已读' : ' · 已送达' : ''}</div></div></article>;
         })}</div></div>
         <div className="composer"><div className="actions" aria-label="模拟沟通操作">{Object.entries(actions).map(([kind, label]) => <button key={kind} data-action={kind} onClick={() => void run(() => performAction(kind))}>{label}</button>)}</div><form id="send-form" onSubmit={event => {event.preventDefault(); if (draft.trim()) void run(() => performAction('text', draft.trim()));}}><label className="sr-only" htmlFor="draft">消息内容</label><textarea id="draft" placeholder="输入一条模拟消息…" maxLength={2000} rows={2} value={draft} onChange={event => setDraft(event.target.value)} /><div className="send-footer"><small>仅修改本地模拟数据</small><button className="primary" type="submit">发送消息</button></div></form></div>
       </div>
