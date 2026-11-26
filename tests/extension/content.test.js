@@ -213,7 +213,7 @@ test('浮窗收藏标识独立于沟通状态，JD标题是安全的详情页链
   await h.deliver(snapshot());
   const rows=all(h.widget(),'bh-job'),link=find(rows[1],'bh-job-title');
   assert.equal(link.tagName,'A');assert.equal(link.href,'https://www.zhipin.com/job_detail/job-1.html');assert.equal(link.target,'_blank');assert.equal(link.rel,'noopener noreferrer');
-  assert.equal(find(rows[1],'bh-favorite').textContent,'已收藏');assert.equal(currentStatus(h).textContent,'附件简历请求已发送');
+  assert.equal(find(rows[1],'bh-favorite').getAttribute('aria-label'),'已收藏');assert.equal(currentStatus(h).textContent,'附件简历请求已发送');
   assert.equal(find(rows[0],'bh-job-title').tagName,'SPAN');
 });
 

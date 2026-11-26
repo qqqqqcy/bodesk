@@ -56,7 +56,7 @@ export function BoardEditor({target, account, onSave, onClose}: {
 
   return <dialog className="board-edit-dialog" ref={showEditorDialog} aria-labelledby={heading}
     onCancel={event => {event.preventDefault(); cancel();}}>
-    <h2 id={heading}>{title}</h2>
+    <h2 id={heading}>{selection ? title : target.name + ' · ' + title}</h2>
     {target.kind === 'status' ? (selection ? <>
       <p>将「{target.name}」的状态从「{target.status}」改为「{statusOptionLabel(selection)}」？</p>
       {error && <p className="board-edit-error" role="alert">{error}</p>}
@@ -68,11 +68,9 @@ export function BoardEditor({target, account, onSave, onClose}: {
         </button>
       </div>
     </> : <>
-      <p>{target.name}</p>
       <StatusOptions current={target.manualStatus ?? 'auto'} onSelect={setSelection} />
       <div className="board-edit-actions"><button className="button" type="button" onClick={onClose}>关闭</button></div>
     </>) : <form onSubmit={saveNote}>
-      <p>{target.name}</p>
       <textarea aria-labelledby={heading} rows={5} maxLength={10000} autoFocus disabled={saving}
         value={note} onChange={event => setNote(event.target.value)} />
       {error && <p className="board-edit-error" role="alert">{error}</p>}

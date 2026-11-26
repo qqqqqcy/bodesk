@@ -21,9 +21,16 @@ export function extensionConfig(target: 'pages' | 'content' | 'main'): InlineCon
       output: {entryFileNames: '[name].js', chunkFileNames: 'assets/[name]-[hash].js'},
     }}};
   }
+  if (target === 'content') {
+    return {...common, build: {...common.build, assetsInlineLimit: 0, cssCodeSplit: false, rolldownOptions: {
+      input: root + '/content.tsx',
+      output: {format: 'iife', name: 'BossHelperContent', entryFileNames: 'content.js',
+        assetFileNames: asset => asset.names.includes('style.css') ? 'content.css' : 'assets/[name]-[hash][extname]'},
+    }}};
+  }
   return {...common, build: {...common.build, lib: {
-    entry: root + '/' + target + (target === 'content' ? '.tsx' : '.ts'),
-    name: target === 'content' ? 'BossHelperContent' : 'BossHelperPage',
+    entry: root + '/main.ts',
+    name: 'BossHelperPage',
     formats: ['iife'],
     fileName: () => target + '.js',
   }}};

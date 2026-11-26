@@ -1,6 +1,8 @@
 import {useMemo, useState} from 'react';
 import {flexRender, getCoreRowModel, getFilteredRowModel, getGroupedRowModel, getSortedRowModel, useReactTable} from '@tanstack/react-table';
 import type {ColumnDef, TableState} from '@tanstack/react-table';
+import {ArrowLeft, ArrowRight, ChevronRight} from 'reicon';
+import {Icon} from './icon.tsx';
 import {BoardEditor} from './board-editor.tsx';
 import type {BoardEdit} from './board-editor.tsx';
 import {resumeEventStage} from './core.ts';
@@ -130,9 +132,7 @@ const boardColumns = (edit: (target: BoardEdit) => void, busy: boolean): ColumnD
         <p className="board-message-text" title={message.text}>{message.text}</p>
         <p className="board-message-meta">
           <span className="board-message-sender" data-direction={message.direction}>
-            {message.direction !== 'unknown' && <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M2.5 8h10.75m-4-4 4 4-4 4" />
-            </svg>}
+            {message.direction !== 'unknown' && <Icon icon={message.direction === 'in' ? ArrowLeft : ArrowRight} />}
             {senders[message.direction]}
           </span>
           <MessageReceipt direction={message.direction} receipt={message.receipt} />
@@ -158,19 +158,21 @@ const boardColumns = (edit: (target: BoardEdit) => void, busy: boolean): ColumnD
     id: 'detail', header: '状态说明与备注',
     cell: ({row}) => {
       const {id, title, detail, note} = row.original;
-      return <>
-        <div className="board-cell-actions">
-          <span className="board-status-detail">{detail}</span>
-          <NoteButton label="JD 备注" name={title} note={note} disabled={busy}
-            onClick={() => edit({kind: 'job-note', id, name: title, note})} />
+      return <div className="board-cell-actions">
+        <div>
+          {detail && <p className="board-status-detail">{detail}</p>}
+          {note && <NotePreview note={note} />}
         </div>
-        {note && <NotePreview note={note} />}
-      </>;
+        <NoteButton label="JD 备注" name={title} note={note} disabled={busy}
+          onClick={() => edit({kind: 'job-note', id, name: title, note})} />
+      </div>;
     },
   },
   {
     accessorKey: 'conditions', header: '职位条件',
-    cell: ({row}) => row.original.conditions.join(' · ') || <span className="board-missing">—</span>,
+    cell: ({row}) => row.original.conditions.length
+      ? row.original.conditions.map((condition, index) => <span className="board-condition" key={index}>{condition}{index + 1 < row.original.conditions.length && ' · '}</span>)
+      : <span className="board-missing">—</span>,
   },
   {
     id: 'activityAt',
@@ -268,7 +270,7 @@ export function JobBoard({snapshot, busy, onSave}: {snapshot: DatabaseSnapshot |
         }} />
     </div>
     {groups.length ? <>
-      <p className="board-summary">{count === data.length ? count : count + ' / ' + data.length} 个 JD，{groups.length} 种状态 <span>推进较深的状态在上方</span></p>
+      <p className="board-summary">{count === data.length ? count : count + ' / ' + data.length} 个 JD，{groups.length} 种状态</p>
       <div className="board-table-wrap" role="region" aria-label="JD 状态分组" tabIndex={0}>
         <table className="board-table">
           <thead><tr>{headers.map(header =>
@@ -285,7 +287,7 @@ export function JobBoard({snapshot, busy, onSave}: {snapshot: DatabaseSnapshot |
                       <button className="board-group-toggle" type="button" aria-expanded={expanded} onClick={() => savePreferences(current => ({...current,
                         collapsed: expanded ? [...new Set([...current.collapsed, status])] : current.collapsed.filter(value => value !== status),
                       }))}>
-                        {statusLabel(status)}
+                        <Icon icon={ChevronRight} />{statusLabel(status)}
                       </button>
                     </h2>
                     <span className="board-count">{group.subRows.length} 个 JD</span>

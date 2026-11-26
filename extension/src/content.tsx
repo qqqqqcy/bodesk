@@ -1,10 +1,14 @@
 import {useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore} from 'react';
 import {createRoot} from 'react-dom/client';
+import {ArrowUpRight, ChevronDown, More, Star, Trash} from 'reicon';
+import {Icon} from './icon.tsx';
 import {MessageReceipt} from './message-receipt.tsx';
 import {NoteIcon, showEditorDialog, statusOptionLabel, StatusOptions} from './record-editing.tsx';
 import type {ExternalRecord, HumanMessagePreview, WidgetContext, WidgetData, WidgetJob} from './types.ts';
 import {jobURL, normalizeStatus, statusLabel} from './status.ts';
 import {attachWidgetDragHandle} from './widget-position.ts';
+import './typography.css';
+import '../content.css';
 
 const CHANNEL = 'boss-local-helper-v1';
 type NoteKind = 'job-note' | 'company-note';
@@ -119,10 +123,9 @@ function NoteEditor({kind, id, title}: {kind: NoteKind; id: string; title?: stri
   return <div ref={layer} className="bh-layer" role="dialog" aria-labelledby={headingId} onKeyDown={event => {
     if (event.key === 'Escape') {event.stopPropagation(); close(false);}
   }}>
-    <h3 id={headingId}>{label}</h3>
-    {title && <p className="bh-layer-subtitle">{title}</p>}
+    <h3 id={headingId}>{title ? title + ' · ' + label : label}</h3>
     <form className="bh-editor" onSubmit={save}>
-      <textarea className="bh-note-input" aria-labelledby={headingId} rows={4} maxLength={10000} value={value} disabled={saving} autoFocus placeholder={kind === 'company-note' ? '记录这家公司的沟通情况、偏好等' : '记录这个职位的沟通要点、面试安排等'} onChange={event => {
+      <textarea className="bh-note-input" aria-labelledby={headingId} rows={4} maxLength={10000} value={value} disabled={saving} autoFocus onChange={event => {
         draft.value = event.target.value;
         draft.revision++;
         setValue(draft.value);
@@ -209,8 +212,7 @@ function StatusPicker({id, job, editor, previousStatus, dismiss}: {id: string; j
     <div ref={layer} id={id} className="bh-layer" role="dialog" aria-labelledby={id + '-options'} onKeyDown={event => {
       if (event.key === 'Escape') {event.stopPropagation(); void dismiss();}
     }}>
-      <h3 id={id + '-options'}>选择职位状态</h3>
-      <p className="bh-layer-subtitle">{job.title || '当前职位'}</p>
+      <h3 id={id + '-options'}>{job.title || '当前职位'} · 修改状态</h3>
       <StatusOptions current={current} onSelect={setSelection} />
       <button className="bh-layer-close" type="button" onClick={() => void dismiss()}>关闭</button>
     </div>
@@ -256,13 +258,9 @@ function LatestMessage({text, direction, receipt}: HumanMessagePreview) {
     <div id={messageId} className="bh-message-body" data-expanded={expanded}>
       <span className="bh-message-text" ref={message}>{text}</span>
     </div>
-    {overflows && <button className="bh-icon-button bh-message-toggle" type="button" aria-label={expanded ? '收起消息' : '展开消息'} aria-controls={messageId} aria-expanded={expanded} onClick={() => setExpandedText(expanded ? null : text)} />}
+    {overflows && <button className="bh-icon-button bh-message-toggle" type="button" aria-label={expanded ? '收起消息' : '展开消息'} aria-controls={messageId} aria-expanded={expanded} onClick={() => setExpandedText(expanded ? null : text)}><Icon icon={ChevronDown} /></button>}
     <MessageReceipt direction={direction} receipt={receipt} />
   </div>;
-}
-
-function DeleteIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5m4-5v5" /></svg>;
 }
 
 function DeleteLayer({name, company, editor, message, draftKeys}: {name: string; company?: boolean; editor: string; message: ExternalRecord; draftKeys: string[]}) {
@@ -292,8 +290,7 @@ function DeleteLayer({name, company, editor, message, draftKeys}: {name: string;
     }
   }
   return <dialog className="bh-layer bh-delete-dialog" ref={showEditorDialog} aria-labelledby={headingId} onCancel={event => {event.preventDefault(); close();}}>
-    <h3 id={headingId}>删除{company ? '公司' : '职位'}记录？</h3>
-    <p className="bh-layer-subtitle">{name}</p>
+    <h3 id={headingId}>删除「{name}」的{company ? '公司' : '职位'}记录？</h3>
     <p>{company ? '将清除这家公司的本地备注及旗下所有 JD 的备注和状态。' : '将清除此 JD 的本地备注和状态。'}后续采集会跳过{company ? '这家公司' : '此 JD'}。已有聊天和 BOSS 上的收藏会保留。</p>
     {error && <p className="bh-status-error" role="alert">{error}</p>}
     <div className="bh-editor-actions">
@@ -322,20 +319,22 @@ function Job({job, context}: {job: WidgetJob; context: WidgetContext}) {
   return <article className={'bh-job' + (job.current ? ' bh-current' : '')} aria-current={job.current ? 'true' : undefined}>
     <div className="bh-job-heading-row">
       <h3 className="bh-job-heading">{url ? <a className="bh-job-title" href={url} target="_blank" rel="noopener noreferrer">{job.title || '待识别 JD'}</a> : <span className="bh-job-title">{job.title || '待识别 JD'}</span>}</h3>
+      {job.favorite && <span className="bh-favorite" role="img" aria-label="已收藏" title="已收藏"><Icon icon={Star} /></span>}
+    </div>
+    {job.note && <p className="bh-note-text">{job.note}</p>}
+    <div className="bh-job-status-row">
+      <button className="bh-job-status" type="button" disabled={!canEditStatus} aria-haspopup={canEditStatus ? 'dialog' : undefined}
+        aria-label={canEditStatus ? statusText + '，修改' + (job.title || '当前职位') + '的状态' : undefined}
+        aria-expanded={canEditStatus ? statusOpen : undefined} aria-controls={statusOpen ? statusPickerId : undefined}
+        onClick={() => {if (statusOpen) void closeEditor(); else activateEditor(statusKey);}}
+        onKeyDown={event => {if (statusOpen && event.key === 'Escape') {event.stopPropagation(); void closeEditor();}}}>{statusText}{canEditStatus && <Icon icon={ChevronDown} />}</button>
       <div className="bh-heading-actions">
-        {job.favorite && <span className="bh-favorite">已收藏</span>}
         <button className="bh-icon-button bh-job-note-edit" type="button" disabled={!job.id} aria-label={noteLabel + '：' + (job.title || '待识别 JD')} title={noteLabel} data-active={view.editor === noteKey} onClick={openNote}><NoteIcon hasNote={!!job.note} /></button>
         <button className="bh-icon-button bh-job-delete" type="button" disabled={!job.id || !job.persisted} aria-label={'删除 ' + (job.title || '未命名职位')} title="删除职位记录" aria-haspopup="dialog" onClick={remove}>
-          <DeleteIcon />
+          <Icon icon={Trash} />
         </button>
       </div>
     </div>
-    {job.note && <p className="bh-note-text">{job.note}</p>}
-    <button className="bh-job-status" type="button" disabled={!canEditStatus} aria-haspopup={canEditStatus ? 'dialog' : undefined}
-      aria-label={canEditStatus ? statusText + '，修改' + (job.title || '当前职位') + '的状态' : undefined}
-      aria-expanded={canEditStatus ? statusOpen : undefined} aria-controls={statusOpen ? statusPickerId : undefined}
-      onClick={() => {if (statusOpen) void closeEditor(); else activateEditor(statusKey);}}
-      onKeyDown={event => {if (statusOpen && event.key === 'Escape') {event.stopPropagation(); void closeEditor();}}}>{statusText}</button>
     {statusOpen && <StatusPicker key={view.session} id={statusPickerId} job={job} editor={statusKey} previousStatus={status} dismiss={closeEditor} />}
     {job.latestMessage && <LatestMessage {...job.latestMessage} />}
     {!!job.noteConflicts?.length && <details className="bh-note-history"><summary>合并前的备注（{job.noteConflicts.length}）</summary>{job.noteConflicts.map((note, index) => <p className="bh-note-text" key={index}>{note.text}</p>)}</details>}
@@ -380,13 +379,13 @@ function Widget() {
   }
   return <>
     <div className="bh-widget-header">
-      <div className="bh-widget-drag" ref={attachWidgetDragHandle} role="group" tabIndex={0} aria-label="拖动浮窗，或用方向键移动" aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight" title="拖动浮窗" />
+      <div className="bh-widget-drag" ref={attachWidgetDragHandle} role="group" tabIndex={0} aria-label="拖动浮窗，或用方向键移动" aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight" title="拖动浮窗"><Icon icon={More} /></div>
       <h2 className="bh-company" hidden={collapsed}>{companyName}</h2>
       {context && !data?.companyDeleted && <div className="bh-heading-actions" hidden={collapsed}>
         <button className="bh-icon-button bh-company-note-edit" type="button" disabled={!companyId} aria-label={companyNoteLabel} title={companyNoteLabel} aria-haspopup="dialog" data-active={editor === key} onClick={() => openNoteEditor('company-note', companyId, data?.companyNote || '')}><NoteIcon hasNote={!!data?.companyNote} /></button>
-        {data?.companyPersisted && <button className="bh-icon-button bh-company-delete" type="button" aria-label={'删除公司 ' + companyName} title="删除公司记录" aria-haspopup="dialog" onClick={() => {if (editor) showNotice('请先保存或取消正在编辑的内容'); else activateEditor(deleteKey);}}><DeleteIcon /></button>}
+        {data?.companyPersisted && <button className="bh-icon-button bh-company-delete" type="button" aria-label={'删除公司 ' + companyName} title="删除公司记录" aria-haspopup="dialog" onClick={() => {if (editor) showNotice('请先保存或取消正在编辑的内容'); else activateEditor(deleteKey);}}><Icon icon={Trash} /></button>}
       </div>}
-      <button className="bh-icon-button bh-widget-toggle" type="button" aria-label={collapsed ? '展开浮窗' : '收起浮窗'} aria-expanded={!collapsed} aria-controls="boss-local-helper-widget-body" onClick={toggleWidget} />
+      <button className="bh-icon-button bh-widget-toggle" type="button" aria-label={collapsed ? '展开浮窗' : '收起浮窗'} aria-expanded={!collapsed} aria-controls="boss-local-helper-widget-body" onClick={toggleWidget}><Icon icon={ChevronDown} /></button>
     </div>
     <div id="boss-local-helper-widget-body" className="bh-widget-body" hidden={collapsed}>
       {context && !!data?.companyNote && <div className="bh-company-notes" role="group" aria-label="公司备注"><p className="bh-note-text">{data.companyNote}</p></div>}
@@ -394,15 +393,14 @@ function Widget() {
       {context && editor === deleteKey && <DeleteLayer name={companyName} company editor={deleteKey} message={{type: 'DELETE_COMPANY', account: context.account, companyId, expectedNote: data?.companyNote || ''}} draftKeys={[key, ...(data?.jobs || []).map(job => editorKey('job-note', job.id))]} />}
       <div ref={records} className="bh-records">
         {!context && <p className="bh-empty">打开一段对话或一个职位，查看沟通记录。</p>}
-        {context && !!data?.jobs?.length && <section className="bh-jobs" aria-labelledby="bh-jobs-heading">
-          <div className="bh-jobs-heading"><h2 id="bh-jobs-heading">职位记录</h2><span>{data.jobs.length} 个</span></div>
+        {context && !!data?.jobs?.length && <section className="bh-jobs" aria-label="职位记录">
           {data.jobs.map(job => <Job key={context.account + ':' + job.id} job={job} context={context} />)}
         </section>}
         <p className="bh-notice" role="status" hidden={!notice}>{notice}</p>
       </div>
       <div className="bh-controls">
-        <button className="bh-overview" type="button" onClick={() => void openDashboard('board')}>JD 看板</button>
-        <button className="bh-overview" type="button" onClick={() => void openDashboard('collection')}>采集与导出</button>
+        <button className="bh-overview" type="button" onClick={() => void openDashboard('board')}>JD 看板<Icon icon={ArrowUpRight} /></button>
+        <button className="bh-overview" type="button" onClick={() => void openDashboard('collection')}>采集与导出<Icon icon={ArrowUpRight} /></button>
       </div>
     </div>
   </>;

@@ -3,6 +3,7 @@ import {createRoot} from 'react-dom/client';
 import {JobBoard} from './job-board.tsx';
 import type {DatabaseSnapshot, ExternalRecord} from './types.ts';
 import {syncInterval, syncIntervalSeconds} from './sync-interval.ts';
+import './typography.css';
 import '../dashboard.css';
 
 const text = (value: unknown, fallback = '') => value == null || value === '' ? fallback : String(value);
@@ -126,7 +127,7 @@ function Dashboard() {
     const changeView = () => setShowBoard(isBoardView());
     window.addEventListener('hashchange', changeView);
     const account = new URLSearchParams(location.search).get('account');
-    void load(account || undefined).then(() => notify('已载入本地记录。')).catch(error => notify(errorText(error), true)).finally(() => markBusy(false));
+    void load(account || undefined).then(() => notify('')).catch(error => notify(errorText(error), true)).finally(() => markBusy(false));
     const timer = setInterval(() => {
       const current = state.current;
       if (current.busy || current.stopping || current.syncRequested || !current.db?.sync.running || document.hidden) return;
@@ -172,7 +173,6 @@ function Dashboard() {
         {accountPicker}
         <dl className="local-count"><dt>已记录对话</dt><dd id="conversation-count">{db ? db.conversations.length : '—'}</dd></dl>
         <button id="export" className="button export" type="button" disabled={busy || stopping || !db} onClick={() => void exportData()}>导出 JSON</button>
-        <p className="hint">导出文件可能包含聊天等隐私信息，请妥善保管。</p>
       </section>
 
       <section className="coverage" aria-labelledby="coverage-title" aria-busy={busy} id="sync-panel">
@@ -189,19 +189,17 @@ function Dashboard() {
           {current.updatedAt != null && <p>更新时间 {formatTime(current.updatedAt)}</p>}
         </div>
         {current.message && <p className="coverage-note">{describe(current.message)}</p>}
-        <p id="sync-message" className="hint">采集范围取决于聊天页已加载的会话，可能只覆盖部分记录。</p>
         <div className="interval-setting">
           <div className="interval-heading">
             <label htmlFor="sync-interval">采集请求间隔</label>
             <output htmlFor="sync-interval">{selectedInterval} 秒</output>
           </div>
           <input id="sync-interval" type="range" min={syncInterval.min} max={syncInterval.max} step={1} value={selectedInterval}
-            aria-valuetext={selectedInterval + ' 秒'} aria-describedby="interval-hint interval-scope"
+            aria-valuetext={selectedInterval + ' 秒'} aria-describedby="interval-scope"
             disabled={busy || stopping || !db?.account} onChange={event => {if (db?.account) setIntervalDraft({account: db.account, seconds: event.target.valueAsNumber});}} />
           <div className="interval-limits" aria-hidden="true"><span>{syncInterval.min} 秒</span><span>{syncInterval.max} 秒</span></div>
-          <p id="interval-hint" className="hint">间隔越短，采集通常越快，但请求更密集，更容易遇到限流或验证。间隔越长，采集耗时越久，仍可能触发限制。</p>
           <div className="interval-footer">
-            <p id="interval-scope" className="hint">默认 {syncInterval.default} 秒。按账号保存，下次采集生效。</p>
+            <span id="interval-scope" hidden>按账号保存，下次采集生效。</span>
             <button className="button" id="save-sync-interval" type="button" disabled={busy || stopping || !db?.account || selectedInterval === db.syncIntervalSeconds} onClick={() => void saveInterval()}>保存间隔</button>
           </div>
         </div>

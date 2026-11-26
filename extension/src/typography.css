@@ -1,0 +1,16 @@
+@import "@fontsource-variable/geist/wght.css";
+
+.bh-icon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  inline-size: 24px;
+  block-size: 24px;
+  vertical-align: middle;
+}
+
+.bh-icon > svg {
+  display: block;
+  inline-size: 18px;
+  block-size: 18px;
+}

@@ -6,6 +6,7 @@ import {Jobs} from './Jobs.tsx';
 import type {MockConfig, RequestEntry} from './types.ts';
 import type {ExternalRecord} from '../../extension/src/types.ts';
 import './styles.css';
+import '../../extension/src/typography.css';
 import '../../extension/content.css';
 
 const bridgeHint = '未检测到扩展。请加载或重新加载项目根目录下的 extension，然后刷新此页。';
