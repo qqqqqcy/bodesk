@@ -8,7 +8,15 @@ import {extensionConfig} from '../vite.extension.config.ts';
 
 const extension = fileURLToPath(new URL('../extension/', import.meta.url));
 const output = join(extension, 'dist');
-export const extensionStaticFiles = ['manifest.json', 'content.css'];
+export const extensionStaticFiles = [
+  'manifest.json',
+  'content.css',
+  'assets/icon.svg',
+  'assets/icon-16.png',
+  'assets/icon-32.png',
+  'assets/icon-48.png',
+  'assets/icon-128.png',
+];
 
 export async function buildExtension() {
   const staging = await mkdtemp(join(tmpdir(), 'boss-helper-build-'));

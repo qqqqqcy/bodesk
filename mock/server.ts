@@ -5,10 +5,14 @@ import {resolve, extname, sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {ACCOUNTS, SCENARIOS, createWorld, listRows, jobPageFixtures, historyPage, appendMessage, switchJob} from './fixtures.ts';
 import type {Connect} from 'vite';
+import {isCompanyJobsPath} from '../extension/src/company-jobs.ts';
 
 const PUBLIC = resolve(fileURLToPath(new URL('./dist/', import.meta.url)));
 const MIME: Record<string, string> = {'.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json'};
-const sessionWorld=(options?: Parameters<typeof createWorld>[0])=>({...createWorld(options),deletionProbe:randomUUID().replaceAll('-','').slice(0,12)});
+const sessionWorld=(options?: Parameters<typeof createWorld>[0])=>{
+  const world=createWorld(options);
+  return {...world,favoriteCompanies:world.scenario==='empty'?[]:['星河科技','仅收藏的示例公司'],deletionProbe:randomUUID().replaceAll('-','').slice(0,12)};
+};
 
 function json(response: ServerResponse, status: number, value: unknown, headers: Record<string, string> = {}) {
   response.writeHead(status, {'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers});
@@ -50,6 +54,14 @@ export function createMockServer({webMiddleware}: {webMiddleware?: Connect.NextH
       if (url.pathname === '/__mock/requests' && request.method === 'GET') return ok(world.requests);
       if (url.pathname === '/__mock/jobs' && request.method === 'GET') return ok(jobPageFixtures(world));
       if (url.pathname === '/__mock/favorites' && request.method === 'GET') return ok({rows:jobPageFixtures(world).rows.filter(row=>world.favoriteJobIds.includes(row.encryptJobId))});
+      if (url.pathname === '/__mock/company-favorites' && request.method === 'GET') return ok({names:world.favoriteCompanies});
+      if (url.pathname === '/__mock/company-favorites' && request.method === 'POST') {
+        const {companyName,favorite}=await bodyOf(request);
+        if(typeof companyName!=='string'||!companyName.trim()||typeof favorite!=='boolean')throw new Error('无效公司收藏操作');
+        world.favoriteCompanies=world.favoriteCompanies.filter(name=>name!==companyName);
+        if(favorite)world.favoriteCompanies.push(companyName);
+        return ok({ok:true});
+      }
       if (url.pathname === '/__mock/favorite' && request.method === 'POST') {
         const action=await bodyOf(request);
         if(typeof action.favorite!=='boolean'||!jobPageFixtures(world).rows.some(row=>row.encryptJobId===action.jobId))throw new Error('无效收藏操作');
@@ -107,7 +119,7 @@ export function createMockServer({webMiddleware}: {webMiddleware?: Connect.NextH
       }
       if (request.method !== 'GET' && request.method !== 'HEAD') return json(response, 405, {error: '不支持此方法'});
       if (webMiddleware) return webMiddleware(request, response, () => json(response, 404, {error: '页面不存在'}));
-      const page = ['/', '/web/geek/chat', '/web/geek/jobs', '/web/geek/recommend'].includes(url.pathname) || /^\/job_detail\/[a-z0-9_-]+\.html$/.test(url.pathname);
+      const page = ['/', '/web/geek/chat', '/web/geek/jobs', '/web/geek/recommend'].includes(url.pathname) || /^\/job_detail\/[a-z0-9_-]+\.html$/.test(url.pathname) || isCompanyJobsPath(url.pathname);
       if (!page && !url.pathname.startsWith('/assets/')) return json(response, 404, {error: '页面不存在'});
       const file = page ? resolve(PUBLIC, 'index.html') : resolve(PUBLIC, '.' + decodeURIComponent(url.pathname));
       if (!file.startsWith(PUBLIC + sep)) return json(response, 404, {error: '页面不存在'});

@@ -10,8 +10,14 @@ const timeOf = (value?: Contribution) => Number.isFinite(Number(value?.observedA
 const messageTime = (m: MessageRecord) => Number.isFinite(Number(m.time)) ? Number(m.time) : 0;
 const isSystem = (m: MessageRecord) => m.isSystem !== false && (m.isSystem === true || Number(m.type) === 1 && Number(m.bodyType) === 4 || [3,4].includes(Number(m.type)) && Number(m.bodyType) === 1 && Number(m.templateId) === 3);
 export const isWithdrawn = (text: unknown) => /(?:撤回了一条消息|撤回了一条|消息已撤回|已撤回一条消息|撤回了消息)/.test(String(text||''));
+export const isCompetitionPreview = (text: unknown) => /(?:[你您]与该职位竞争者\s*PK\s*情况|^\[竞争情况(?:分析)?\]$)/i.test(String(text||'').trim());
+export const isCompetitionCard = (message: MessageRecord) =>
+  (Number(message.type) === 4 && Number(message.bodyType) === 16 && Number(message.templateId) === 1) ||
+  (message.messageType === 'articles' && isCompetitionPreview(message.text));
+export const isCompetitionSummary = (preview: string, messages: MessageRecord[]) => isCompetitionPreview(preview) ||
+  !!preview && messages.some(message => isCompetitionCard(message) && String(message.text || '').split('\n').some(line => line.trim() === preview));
 const isInterviewCard = (message: MessageRecord) => message.messageType === 'interview' || (Number(message.type) === 3 && Number(message.bodyType) === 14 && Number(message.templateId) === 1);
-const isHuman = (m: MessageRecord) => !isInterviewCard(m) && !isSystem(m) && !isWithdrawn(m.text) && (m.isSystem === false || (m.type == null && m.bodyType == null) || ([1,3].includes(Number(m.type)) && Number(m.bodyType) === 1 && Number(m.templateId) !== 3) || (Number(m.type) === 1 && Number(m.bodyType) === 7));
+const isHuman = (m: MessageRecord) => !isCompetitionCard(m) && !isInterviewCard(m) && !isSystem(m) && !isWithdrawn(m.text) && (m.isSystem === false || (m.type == null && m.bodyType == null) || ([1,3].includes(Number(m.type)) && Number(m.bodyType) === 1 && Number(m.templateId) !== 3) || (Number(m.type) === 1 && Number(m.bodyType) === 7));
 
 export function isChatMessage(message: MessageRecord) {
   if (!isHuman(message)) return false;
@@ -80,7 +86,7 @@ export function inferStatus(row: ConversationRecord={}, messages: MessageRecord[
   }
   if (latestInterview?.state === 'active') return {status:'interviewing',label:'面试中',observedAt:latestInterview.time,evidence:'面试卡片：'+latestInterview.text.slice(0,300),priority:4};
   const preview = String(row.lastText || '').trim();
-  const cardPreview = preview && ordered.some(message => isInterviewCard(message) && String(message.text || '').split('\n').some(line => line.trim() === preview));
+  const cardPreview = isCompetitionSummary(preview, ordered) || preview && ordered.some(message => isInterviewCard(message) && String(message.text || '').split('\n').some(line => line.trim() === preview));
   const fallback = inferCommunicationStatus(cardPreview ? {...row,lastText:''} : row, ordered);
   return latestInterview ? {...fallback, interviewClosedAt:latestInterview.time} : fallback;
 }
@@ -107,16 +113,16 @@ function inferCommunicationStatus(row: ConversationRecord, ordered: MessageRecor
     if(resumeLabel(preview))return {status:'unknown',label:'未知',observedAt:listTime,evidence:'列表中有较新的疑似简历提示，但对应系统消息尚未采集',priority:0};
     if(typeof row.lastIsSelf!=='boolean')return {status:'unknown',label:'未知',observedAt:listTime,evidence:'列表中有较新的消息，但发送方向未知',priority:0};
     const self=!row.lastIsSelf;
-    return {status:self?'awaiting_self':'awaiting_boss',label:self?'待自己回复':'待Boss回复',observedAt:listTime,evidence:'会话列表有较新的消息：'+preview,priority:1};
+    return {status:self?'awaiting_self':'awaiting_boss',label:self?'待自己回复':'待 Boss 回复',observedAt:listTime,evidence:'会话列表有较新的消息：'+preview,priority:1};
   }
   if (latest) {
     const self=latest.direction === 'in';
-    return {status:self?'awaiting_self':'awaiting_boss',label:self?'待自己回复':'待Boss回复',observedAt:messageTime(latest),evidence:'最近沟通消息：'+(String(latest.text || '').trim() || '消息卡片'),priority:1};
+    return {status:self?'awaiting_self':'awaiting_boss',label:self?'待自己回复':'待 Boss 回复',observedAt:messageTime(latest),evidence:'最近沟通消息：'+(String(latest.text || '').trim() || '消息卡片'),priority:1};
   }
   const onlySystemAtEnd=ordered.length>0 && ordered.every(m=>!isHuman(m)) && (!Number(row.lastMessageAt) || Number(row.lastMessageAt)<=messageTime(ordered[0]));
   if (!onlySystemAtEnd && typeof row.lastIsSelf === 'boolean' && String(row.lastText || '').trim() && !/(?:简历.{0,20}(?:已发送|已查看|请求已发送)|(?:已发送|已查看).{0,20}简历)/.test(row.lastText || '')) {
     const self=!row.lastIsSelf;
-    return {status:self?'awaiting_self':'awaiting_boss',label:self?'待自己回复':'待Boss回复',observedAt:messageTime({time:row.lastMessageAt ?? row.time}),evidence:'会话列表最近消息：'+String(row.lastText).trim(),priority:1};
+    return {status:self?'awaiting_self':'awaiting_boss',label:self?'待自己回复':'待 Boss 回复',observedAt:messageTime({time:row.lastMessageAt ?? row.time}),evidence:'会话列表最近消息：'+String(row.lastText).trim(),priority:1};
   }
   return {status:'unknown',label:'未知',observedAt:0,evidence:'缺少足够状态证据',priority:0};
 }

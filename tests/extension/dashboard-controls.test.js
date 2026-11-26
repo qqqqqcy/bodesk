@@ -16,15 +16,47 @@ const source = bundle.output.find(file => file.type === 'chunk' && file.isEntry)
 const snapshot = (account = 'a') => ({account, accounts: ['a', 'b'], conversations: [{}], sync: {running: false, processed: 1, total: 1}});
 const options = {url: 'https://extension.test/dist/dashboard.html?account=a'};
 
-test('React 采集页读取指定账号，保留同步与导出控件', async () => {
-  const sent = [];
-  const harness = browserHarness(source, async message => {sent.push(message); return {ok: true, data: snapshot()};}, options);
+async function chooseDropdown(trigger, text) {
+  await trigger.emit('click');
+  const item = [...trigger.parentElement.querySelectorAll('[role="option"]')].find(option => option.textContent === text);
+  assert.ok(item, text);
+  await item.emit('click');
+}
+
+test('看板仅在不限时展示无状态时间的收藏职位，公司和职位使用不同图标', async () => {
+  const companies=[{id:'company',name:'收藏公司',favorite:true},{id:'company-only',name:'仅收藏公司',favorite:true}];
+  const jobs=[{id:'job',title:'无对话职位',status:'awaiting_contact',favorite:true,jobClosed:true,jobClosedObservedAt:Date.now(),companyId:'company'},
+    {id:'active',title:'仍在招聘的职位',status:'awaiting_boss',statusAt:Date.now(),companyId:'company'},
+    {id:'old',title:'超出日期的职位',status:'awaiting_boss',favorite:true,statusAt:1,companyId:'company'}];
+  const {document}=browserHarness(source,async()=>({ok:true,data:{...snapshot(),jobs,companies}}),options);
   await flush();
-  for (const id of ['account-select', 'refresh', 'sync', 'stop-sync', 'export', 'conversation-count']) assert.ok(harness.document.getElementById(id));
-  for (const id of ['company-list', 'job-count', 'company-filter', 'status-filter', 'delete-from-link']) assert.equal(harness.document.getElementById(id), null);
+  assert.equal(document.querySelectorAll('.board-job-row').length,1);
+  assert.equal(document.querySelector('#board-status-awaiting_contact'),null);
+  const start=document.getElementById('board-activity-start');
+  start.value='19';await start.emit('input');
+  assert.equal(document.querySelectorAll('.board-job-row').length,3);
+  assert.equal(document.querySelector('#board-status-awaiting_contact').textContent,'待沟通');
+  const jobIcon=document.querySelector('.board-col-title [aria-label="已收藏职位"] svg');
+  const companyIcon=document.querySelector('.board-col-company [aria-label="已收藏公司"] svg');
+  assert.ok(jobIcon&&companyIcon);
+  assert.notEqual(jobIcon.innerHTML,companyIcon.innerHTML);
+  assert.match(document.querySelector('.board-favorite-companies li').textContent,/仅收藏公司/);
+  assert.equal(document.querySelector('.board-job-closed').textContent,'职位已关闭');
+  assert.equal(document.getElementById('board-availability'),null);
+});
+
+test('合并页读取指定账号，同屏展示看板、采集与备份控件', async () => {
+  const sent = [];
+  const harness = browserHarness(source, async message => {sent.push(message); return {ok: true, data: {...snapshot(), accountNames: {a:'模拟登录名'}}};}, options);
+  await flush();
+  for (const id of ['account-select', 'sync', 'import', 'export', 'board-activity-start']) assert.ok(harness.document.getElementById(id));
+  assert.equal(harness.document.querySelector('nav, #refresh, #stop-sync'), null);
   assert.deepEqual(sent[0], {type: 'DB_GET', account: 'a'});
-  assert.equal(harness.document.getElementById('conversation-count').textContent, '1');
-  assert.equal(harness.document.getElementById('stop-sync').disabled, true);
+  const accounts=harness.document.getElementById('account-select');
+  assert.equal(accounts.value,'a');
+  await accounts.emit('click');
+  assert.deepEqual([...harness.document.querySelectorAll('[role="option"]')].map(option=>option.textContent),['模拟登录名','未识别名称的账号 2']);
+  assert.match(harness.document.getElementById('conversation-count').textContent, /1$/);
 });
 
 test('切换账号后读取新账号，拒绝把其他账号的记录显示在当前账号下', async () => {
@@ -33,11 +65,11 @@ test('切换账号后读取新账号，拒绝把其他账号的记录显示在�
   const harness = browserHarness(source, async message => {sent.push(message); return {ok: true, data: snapshot(mismatch ? 'a' : message.account)};}, options);
   await flush();
   const select = harness.document.getElementById('account-select');
-  select.value = 'b'; await select.emit('change');
+  await chooseDropdown(select,'未识别名称的账号 2');
   assert.equal(select.value, 'b');
   assert.ok(sent.some(message => message.type === 'SELECT_ACCOUNT' && message.account === 'b'));
   mismatch = true;
-  await harness.document.getElementById('refresh').emit('click');
+  await harness.notify({type: 'DASHBOARD_CHANGED'});
   assert.equal(select.value, 'b');
   assert.match(harness.document.getElementById('feedback').textContent, /账号.*不一致/);
 });
@@ -62,10 +94,11 @@ test('JD 看板支持独立折叠，组内按状态时间排序', async () => {
   }}), options);
   const {document} = harness;
   await flush();
-  await document.querySelector('[href="#board"]').emit('click');
+  document.getElementById('board-activity-start').value = '19';
+  await document.getElementById('board-activity-start').emit('input');
   assert.equal(document.querySelector('h1').textContent, 'JD 看板');
   assert.deepEqual(Array.from(document.querySelectorAll('.board-table thead th'), heading => heading.textContent),
-    ['职位', '公司', '最后一条对话', '状态时间', '状态说明与备注', '职位条件']);
+    ['职位', '公司', '最后一条对话', '状态', '状态说明与备注', '职位条件']);
   const headings = () => Array.from(document.querySelectorAll('.board-group-toggle'), button => button.textContent);
   assert.deepEqual(headings(), ['面试通过', '面试中', '简历已查看', '简历已发送', '待 Boss 回复', '待确认']);
   const viewed = document.querySelector('[aria-labelledby="board-status-resume_viewed"]');
@@ -75,17 +108,18 @@ test('JD 看板支持独立折叠，组内按状态时间排序', async () => {
   assert.equal(rows[0].querySelector('.board-message-text').textContent, '下周有空沟通吗？');
   assert.equal(rows[0].querySelector('.board-message-sender[data-direction="in"]').textContent, '对方');
   const sender = document.querySelector('.board-message-sender[data-direction="out"]');
-  assert.equal(sender.textContent, '自己');
+  assert.equal(sender.textContent, '我');
   assert.equal(sender.querySelector('svg').getAttribute('aria-hidden'), 'true');
   assert.equal(sender.parentElement.querySelector('[data-receipt="delivered"]').textContent, '已送达');
   assert.equal(rows[0].querySelector('.message-receipt'), null);
   assert.equal(rows[0].querySelector('.board-col-latestMessage time').dateTime, '2026-11-26T10:00:00.000Z');
   assert.equal(rows[0].cells[5].textContent, '25–40K · 上海 · 3–5年 · 本科');
   assert.equal(rows[0].querySelector('details p').textContent, '下周跟进\n准备面试');
-  assert.equal(rows[0].querySelector('.board-col-statusAt time').dateTime, '2026-11-25T00:00:00.000Z');
+  assert.equal(rows[0].querySelector('.board-col-status time').dateTime, '2026-11-25T00:00:00.000Z');
+  assert.match(rows[0].querySelector('.board-status-edit').textContent, /附件简历/);
   assert.equal(rows[1].cells[0].textContent, '较早查看');
   assert.equal(rows[1].querySelector('.board-col-conditions').textContent, '—');
-  assert.equal(rows[1].querySelector('.board-col-statusAt .board-missing').textContent, '—');
+  assert.equal(rows[1].querySelector('.board-col-status .board-missing').textContent, '—');
   assert.match(document.querySelector('#board-status-passed').closest('.board-group').querySelector('time').title, /手动/);
   assert.equal(viewed.querySelector('a').href, 'http://127.0.0.1:4173/job_detail/mock.html');
   assert.equal(viewed.querySelectorAll('a').length, 1);
@@ -97,22 +131,60 @@ test('JD 看板支持独立折叠，组内按状态时间排序', async () => {
   assert.equal(document.querySelectorAll('.board-job-row').length, jobs.length - 2);
   assert.match(viewed.querySelector('.board-count').textContent, /2 个 JD/);
   jobs[0].status = 'failed';
-  await document.getElementById('refresh').emit('click');
+  await harness.notify({type: 'DASHBOARD_CHANGED'});
   assert.deepEqual(headings(), ['面试通过', '面试中', '面试失败', '简历已查看', '简历已发送', '待确认']);
   assert.equal(toggle.getAttribute('aria-expanded'), 'false');
   await toggle.emit('click');
   assert.equal(toggle.getAttribute('aria-expanded'), 'true');
   assert.equal(viewed.querySelectorAll('.board-job-row').length, 2);
   const select = document.getElementById('account-select');
-  select.value = 'b'; await select.emit('change');
+  await chooseDropdown(select,'未识别名称的账号 2');
   assert.match(document.querySelector('.job-board').textContent, /当前账号暂无 JD/);
   assert.equal(document.querySelector('.board-job-row'), null);
-  await document.querySelector('[href="#collection"]').emit('click');
   assert.equal(document.getElementById('account-select').value, 'b');
   assert.ok(document.getElementById('sync'));
 });
 
-test('JD 看板按真实活动筛选，并在离开后恢复范围和折叠', async () => {
+test('仅支持状态、公司分组，筛选始终显示且保留旧设置中有效的条件', async () => {
+  const jobs=[
+    {id:'alpha',title:'前端',companyName:'星河',status:'failed',statusAt:Date.now()},
+    {id:'beta',title:'后端',companyName:'星河',status:'interviewing',statusAt:Date.now()},
+    {id:'gamma',title:'全栈',companyName:'云帆',status:'passed',statusAt:Date.now()},
+  ];
+  const {document,window}=browserHarness(source,async()=>({ok:true,data:{...snapshot(),jobs}}),{...options,setup(window) {
+    window.localStorage.setItem('boss-helper.jd-board.preferences',JSON.stringify({groupBy:'title',filters:[{column:'title',operator:'excludes',value:'后端'}]}));
+  }});
+  await flush();
+  const group=document.getElementById('board-group-by');
+  assert.equal(group.value,'status');
+  assert.equal(document.querySelector('select, #board-availability'),null);
+  await group.emit('click');
+  assert.deepEqual([...document.querySelectorAll('[role="option"]')].map(option=>option.textContent),['状态','公司']);
+  await document.querySelector('[role="option"][aria-selected="false"]').emit('click');
+  assert.equal(document.querySelectorAll('.board-job-row').length,3);
+  assert.equal(document.querySelectorAll('.board-table thead th').length,6);
+  const headings=()=>[...document.querySelectorAll('.board-group-toggle')].map(button=>button.textContent).sort();
+  assert.deepEqual(headings(),['云帆','星河'].sort());
+  const button=text=>[...document.querySelectorAll('#board-filter-panel button')].find(node=>node.textContent===text);
+  const operator=document.querySelector('button[aria-label="第 1 条的条件"]');
+  await chooseDropdown(operator,'不包含');
+  const status=document.querySelector('input[aria-label="第 1 条的值"]');
+  status.value='失败';await status.emit('input');
+  assert.equal(document.querySelectorAll('.board-job-row').length,2);
+  await button('添加筛选').emit('click');
+  const companyColumn=document.querySelector('button[aria-label="第 2 条的筛选列"]');
+  assert.equal(companyColumn.value,'company');
+  const company=document.querySelector('input[aria-label="第 2 条的值"]');
+  company.value='星河';await company.emit('input');
+  assert.deepEqual(headings(),['星河']);
+  assert.equal(document.querySelector('.board-job-title').textContent,'后端');
+  const saved=JSON.parse(window.localStorage.getItem('boss-helper.jd-board.preferences'));
+  assert.equal(saved.groupBy,'company');assert.equal(saved.filters.length,2);
+  await button('清空筛选').emit('click');
+  assert.equal(document.querySelectorAll('.board-job-row').length,3);
+});
+
+test('JD 看板按真实活动筛选，并保留范围和折叠', async () => {
   const ago = days => Date.now() - days * 86400000;
   const jobs = [
     {id: 'status', title: '最近换状态', status: 'passed', statusAt: ago(0.5)},
@@ -127,57 +199,81 @@ test('JD 看板按真实活动筛选，并在离开后恢复范围和折叠', as
   const harness = browserHarness(source, async () => ({ok: true, data: {...snapshot(), jobs}}), {...options, url: options.url + '#board'});
   const {document} = harness;
   await flush();
-  const slider = () => document.getElementById('board-activity-range');
+  const slider = () => document.getElementById('board-activity-start');
   const count = () => document.querySelectorAll('.board-job-row').length;
-  const setRange = async (value, label, expectedCount) => {
+  const summary = document.querySelector('.board-summary');
+  assert.equal(document.querySelector('.board-range output'), null);
+  const setRange = async (value, expectedCount) => {
     slider().value = String(value);
     await slider().emit('input');
-    assert.equal(slider().getAttribute('aria-valuetext'), label);
+    assert.equal(slider().value, String(value));
     assert.equal(count(), expectedCount);
+    assert.ok(summary.querySelector('output').textContent.startsWith('活动时间 ' + slider().getAttribute('aria-valuetext') + ' 至 '));
   };
 
-  assert.equal(slider().value, '19');
-  assert.equal(count(), jobs.length);
-  await setRange(1, '最近 1 天', 3);
-  await setRange(15, '最近 15 天', 4);
-  await setRange(16, '最近 1 个月', 5);
-  await setRange(17, '最近 2 个月', 6);
-  await setRange(18, '最近 3 个月', 7);
-  await setRange(1, '最近 1 天', 3);
+  assert.equal(slider().value, '7');
+  await setRange(19, jobs.length);
+  await setRange(1, 3);
+  await setRange(15, 4);
+  await setRange(16, 5);
+  await setRange(17, 6);
+  await setRange(18, 7);
+  await setRange(1, 3);
   await document.querySelector('#board-status-passed button').emit('click');
   assert.equal(count(), 2);
-  await document.querySelector('[href="#collection"]').emit('click');
-  await document.querySelector('[href="#board"]').emit('click');
+  await harness.notify({type: 'DASHBOARD_CHANGED'});
   assert.equal(slider().value, '1');
   assert.equal(document.querySelector('#board-status-passed button').getAttribute('aria-expanded'), 'false');
-  await setRange(19, '不限', jobs.length - 1);
+  await setRange(19, jobs.length - 1);
   assert.equal(document.querySelector('#board-status-passed button').getAttribute('aria-expanded'), 'false');
 });
 
-test('JD 看板当天档位以本地零点为界，独立于最近 1 天', async () => {
+test('JD 看板从旧偏好恢复开始日期，结束日期可独立选择并包含整天', async () => {
   const midnight = new Date(2026, 10, 26).getTime();
   const now = new Date(2026, 10, 26, 12).getTime();
   const jobs = [
     {id: 'today-status', title: '零点状态更新', status: 'awaiting_boss', statusAt: midnight},
-    {id: 'today-chat', title: '今天有消息', status: 'awaiting_boss', latestMessage: {text:'你好',direction:'in',time:now - 1000}},
-    {id: 'yesterday', title: '昨天有消息', status: 'awaiting_boss', latestMessage: {text:'你好',direction:'in',time:midnight - 1000}},
+    {id: 'today-chat', title: '今天有消息', status: 'awaiting_boss', statusAt: new Date(2026, 10, 23).getTime(), latestMessage: {text:'你好',direction:'in',time:now - 1000}},
+    {id: 'yesterday', title: '昨天有消息', status: 'awaiting_boss', statusAt: midnight - 86400000, latestMessage: {text:'你好',direction:'in',time:midnight - 1000}},
+    {id: 'yesterday-start', title: '昨天零点更新', status: 'awaiting_boss', statusAt: new Date(2026, 10, 25).getTime()},
+    {id: 'older', title: '更早更新', status: 'awaiting_boss', statusAt: new Date(2026, 10, 24).getTime()},
+    {id: 'unknown-time', title: '有消息但缺少状态时间', status: 'awaiting_boss', latestMessage: {text:'你好',direction:'in',time:midnight}},
   ];
-  const harness = browserHarness(source, async () => ({ok: true, data: {...snapshot(), jobs}}), {...options, url: options.url + '#board'});
-  harness.window.Date.now = () => now;
+  const sent = [];
+  const harness = browserHarness(source, async message => {sent.push(message); return {ok: true, data: {...snapshot(), jobs}};}, {...options, setup(window) {
+    window.Date.now = () => now;
+    window.localStorage.setItem('boss-helper.jd-board.preferences', JSON.stringify({range: 1, collapsed: []}));
+  }});
   const {document} = harness;
   await flush();
-  const slider = document.getElementById('board-activity-range');
+  const slider = () => document.getElementById('board-activity-start');
+  const end = () => document.getElementById('board-activity-end');
   const visibleTitles = () => Array.from(document.querySelectorAll('.board-job-title'), node => node.textContent);
-  assert.equal(slider.min, '0');
+  assert.equal(slider().value, '1');
+  assert.equal(end().value, '0');
+  assert.equal(slider().getAttribute('aria-valuetext'), '2026/11/25');
   assert.equal(document.querySelector('.board-range-mark').textContent, '当天');
-  slider.value = '0';
-  await slider.emit('input');
-  assert.equal(slider.getAttribute('aria-valuetext'), '当天');
+  slider().value = '0';
+  await slider().emit('input');
   assert.deepEqual(visibleTitles(), ['零点状态更新', '今天有消息']);
-  slider.value = '1';
-  await slider.emit('input');
-  assert.equal(slider.getAttribute('aria-valuetext'), '最近 1 天');
-  assert.equal(visibleTitles().length, 3);
+  slider().value = '1';
+  await slider().emit('input');
+  assert.equal(visibleTitles().length, 4);
+  end().value = '1';
+  await end().emit('input');
+  assert.equal(end().getAttribute('aria-valuetext'), '2026/11/25');
+  assert.equal(slider().min, '1');
+  assert.equal(end().max, '1');
+  assert.deepEqual(visibleTitles().sort(), ['昨天有消息', '昨天零点更新'].sort());
+  await document.getElementById('sync').emit('click');
+  assert.deepEqual(sent.find(message => message.type === 'SYNC').activityWindow, {start: new Date(2026, 10, 25).getTime(), end: midnight - 1});
+  assert.equal(end().value, '1');
+  slider().value = '19';
+  await slider().emit('input');
+  assert.equal(visibleTitles().length, 4);
+  assert.equal(end().max, '18');
+  end().value='0';await end().emit('input');
+  assert.ok(visibleTitles().includes('有消息但缺少状态时间'));
 });
 
 test('看板可编辑公司和 JD 备注，确认状态后即时重新分组', async () => {
@@ -205,6 +301,8 @@ test('看板可编辑公司和 JD 备注，确认状态后即时重新分组', a
     await editor().querySelector('form').emit('submit');
   };
   await flush();
+  document.getElementById('board-activity-start').value = '19';
+  await document.getElementById('board-activity-start').emit('input');
   await document.querySelector('.board-col-company .board-note-edit').emit('click');
   await enterNote('公司备注');
   assert.equal(editor(), null);
@@ -258,9 +356,9 @@ test('导出失败会显示错误，恢复按钮状态', async () => {
   assert.equal(button.disabled, false);
 });
 
-test('滑动条按账号加载请求间隔，改动在点击保存后才提交', async () => {
+test('滑动条按账号加载请求间隔，调整结束后自动保存', async () => {
   const sent = [];
-  const intervals = {b: 15};
+  const intervals = {b: 25};
   const harness = browserHarness(source, async message => {
     sent.push(message);
     if (message.type === 'SET_SYNC_INTERVAL') intervals[message.account] = message.intervalSeconds;
@@ -268,23 +366,20 @@ test('滑动条按账号加载请求间隔，改动在点击保存后才提交',
   }, options);
   await flush();
   const slider = harness.document.getElementById('sync-interval');
-  const save = harness.document.getElementById('save-sync-interval');
+  assert.equal(harness.document.getElementById('save-sync-interval'), null);
   assert.equal(slider.min, '1');
+  assert.equal(slider.max, '15');
   assert.equal(slider.value, '3');
-  assert.equal(save.disabled, true);
   slider.value = '1';
   await slider.emit('input');
   assert.equal(slider.getAttribute('aria-valuetext'), '1 秒');
   assert.ok(!sent.some(message => message.type === 'SET_SYNC_INTERVAL'));
-  await save.emit('click');
+  await slider.emit('change');
   assert.deepEqual(sent.find(message => message.type === 'SET_SYNC_INTERVAL'), {type: 'SET_SYNC_INTERVAL', account: 'a', intervalSeconds: 1});
-  assert.equal(save.disabled, true);
   const account = harness.document.getElementById('account-select');
-  account.value = 'b';
-  await account.emit('change');
+  await chooseDropdown(account,'未识别名称的账号 2');
   assert.equal(slider.value, '15');
-  account.value = 'a';
-  await account.emit('change');
+  await chooseDropdown(account,'未识别名称的账号 1');
   assert.equal(slider.value, '1');
 });
 
@@ -295,9 +390,88 @@ test('仅在已知总数时显示本次处理进度，使用同一账号的最�
   assert.equal(harness.document.querySelector('progress'), null);
 
   sync = {running: true, processed: 4, total: 10, failed: 1};
-  await harness.document.getElementById('refresh').emit('click');
+  await harness.notify({type: 'DASHBOARD_CHANGED'});
   const progress = harness.document.querySelector('progress');
+  const syncButton = harness.document.getElementById('sync');
+  assert.equal(syncButton.getAttribute('aria-busy'), 'true');
+  assert.ok(syncButton.querySelector('svg'));
   assert.equal(progress.value, 4);
   assert.equal(progress.max, 10);
-  assert.match(harness.document.getElementById('sync-progress').textContent, /失败1/);
+  assert.match(harness.document.getElementById('sync-metadata').textContent, /失败数1/);
+  const toggle = harness.document.querySelector('.sync-details-toggle');
+  const details = harness.document.getElementById('sync-details');
+  assert.equal(details.hidden, true);
+  assert.equal(details.previousElementSibling, toggle.closest('.sync-toolbar'));
+  assert.equal(progress.closest('#sync-details'), details);
+  await toggle.emit('click');
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(details.hidden, false);
+  const message = '更新结束：5 个会话，0 个失败，0 个历史未读完。';
+  sync = {running: false, processed: 5, total: 5, failed: 0, message};
+  await harness.notify({type: 'DASHBOARD_CHANGED'});
+  assert.equal(details.querySelector('.coverage-note').textContent, message);
+  assert.equal(harness.document.querySelector('progress'), null);
+  assert.equal(syncButton.getAttribute('aria-busy'), 'false');
+  assert.doesNotMatch(harness.document.querySelector('.sync-toolbar').textContent, /本次采集已结束/);
+  assert.equal(harness.document.querySelector('#sync-panel').textContent.split(message).length, 2);
+  await toggle.emit('click');
+  assert.equal(details.hidden, true);
+});
+
+test('导出、保存编辑与初始加载期间呈现 pending 态与骨架占位，完成后恢复', async () => {
+  let deferGet = true;
+  let finishGet;
+  let finishExport;
+  let finishSave;
+  const job = {id: 'job', title: '前端工程师', companyId: 'company', status: 'awaiting_boss', statusAt: Date.now(), note: '原备注'};
+  const company = {id: 'company', name: '示例公司', note: ''};
+  const payload = () => ({...snapshot(), jobs: [job], companies: [company]});
+  const harness = browserHarness(source, async message => {
+    if (message.type === 'DB_GET') return deferGet ? new Promise(resolve => {finishGet = resolve;}) : {ok: true, data: payload()};
+    if (message.type === 'EXPORT') return new Promise(resolve => {finishExport = resolve;});
+    if (message.type === 'SAVE_JOB') return new Promise(resolve => {finishSave = resolve;});
+    return {ok: true};
+  }, options);
+  const {document} = harness;
+  await flush();
+  const feedback = document.getElementById('feedback');
+  assert.equal(feedback.getAttribute('data-pending'), 'true');
+  assert.ok(feedback.querySelector('.bh-spinner svg'));
+  assert.equal(document.querySelector('.board-empty').getAttribute('data-loading'), 'true');
+  assert.ok(document.querySelector('.board-skeleton'));
+
+  deferGet = false;
+  finishGet({ok: true, data: payload()});
+  await flush();
+  assert.equal(document.querySelector('.board-skeleton'), null);
+  assert.equal(feedback.getAttribute('data-pending'), null);
+
+  const exportButton = document.getElementById('export');
+  const exporting = exportButton.emit('click');
+  await flush();
+  assert.equal(exportButton.getAttribute('aria-busy'), 'true');
+  assert.equal(exportButton.disabled, true);
+  assert.equal(exportButton.textContent, '导出中…');
+  assert.ok(exportButton.querySelector('.bh-spinner svg'));
+  finishExport({ok: true, data: {account: 'a'}});
+  await exporting;
+  assert.equal(exportButton.getAttribute('aria-busy'), 'false');
+  assert.equal(exportButton.disabled, false);
+  assert.equal(exportButton.textContent, '导出 JSON');
+
+  await document.querySelector('.board-col-detail .board-note-edit').emit('click');
+  const dialog = document.querySelector('.board-edit-dialog');
+  const textarea = dialog.querySelector('textarea');
+  textarea.value = '新备注';
+  await textarea.emit('input');
+  const saveButton = dialog.querySelector('.button.primary');
+  const saving = dialog.querySelector('form').emit('submit');
+  await flush();
+  assert.equal(saveButton.getAttribute('aria-busy'), 'true');
+  assert.equal(saveButton.disabled, true);
+  assert.equal(saveButton.textContent, '正在保存…');
+  assert.ok(saveButton.querySelector('.bh-spinner svg'));
+  finishSave({ok: true});
+  await saving;
+  assert.equal(document.querySelector('.board-edit-dialog'), null);
 });

@@ -1,6 +1,7 @@
 import {useEffect, useRef, useState} from 'react';
 import {api, errorText} from './api.ts';
 import type {JobDetail, JobFixtures, MockRow} from './types.ts';
+import {isCompanyJobsPath} from '../../extension/src/company-jobs.ts';
 
 export function Jobs({notice}: {notice: (message: string) => void}) {
   const [fixtures, setFixtures] = useState<JobFixtures | null>(null);
@@ -8,10 +9,14 @@ export function Jobs({notice}: {notice: (message: string) => void}) {
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState('normal');
+  const [favoriteCompanies, setFavoriteCompanies] = useState<string[]>([]);
   const revision = useRef(0);
   const path = location.pathname;
-  const favorites = path === '/web/geek/recommend';
+  const interest = path === '/web/geek/recommend';
+  const companyFavorites = interest && new URLSearchParams(location.search).get('sub') === '2';
+  const favorites = interest && !companyFavorites;
   const standalone = path.startsWith('/job_detail/');
+  const companyJobs = isCompanyJobsPath(path);
   const run = async (work: () => Promise<void>) => {try {await work();} catch (error) {notice(errorText(error));}};
   async function choose(row: MockRow, source = fixtures!) {
     const selection = ++revision.current;
@@ -30,20 +35,45 @@ export function Jobs({notice}: {notice: (message: string) => void}) {
       if (selected?.encryptJobId === row.encryptJobId) setDetail({...currentDetail, relationInfo: {...currentDetail.relationInfo}});
     }
   }
+  async function toggleCompany(companyName: string) {
+    const favorite = !favoriteCompanies.includes(companyName);
+    await api('/__mock/company-favorites', {companyName, favorite});
+    setFavoriteCompanies(previous => favorite ? [...previous, companyName] : previous.filter(name => name !== companyName));
+  }
   useEffect(() => {
     let active = true;
     void run(async () => {
       const result = await api<JobFixtures>('/__mock/jobs');
       if (favorites) result.rows = (await api<{rows: MockRow[]}>('/__mock/favorites')).rows;
+      const companies = companyFavorites || companyJobs ? (await api<{names: string[]}>('/__mock/company-favorites')).names : [];
       if (!active) return;
       setFixtures(result);
+      setFavoriteCompanies(companies);
       const row = standalone ? result.rows.find(item => item.encryptJobId === path.split('/').pop()?.replace(/\.html$/, '')) : result.rows[0];
-      if (row && !favorites) await choose(row, result);
+      if (row && !interest) await choose(row, result);
     });
     return () => {active = false; revision.current++;};
   }, []);
-  if (favorites) return <main id="favorites-layout" className="job-page"><nav className="user-jobs-tab-nav"><span className="current" {...{ka: 'personal_top_interest'}}>感兴趣 <span id="favorites-count">{fixtures?.rows.length || 0}</span></span><span className="current" {...{ka: 'personal_sub_position_focus'}}>职位收藏</span></nav><ul id="favorites-list" className="user-jobs-ul">{fixtures?.rows.map(row => <li key={row.encryptJobId} className={'item-boss' + (row.closed ? ' job-closed' : '')} data-job-id={row.encryptJobId}><div className="company-info"><a href="#" {...{ka: 'personal_interest_brand_' + row.encryptBrandId}}>{row.brandName}</a></div><div className="job-info"><a className="name" href={'/job_detail/' + row.encryptJobId + '.html'} target="_blank" rel="noopener noreferrer"><span className="job-name-text">{row.jobName}</span></a></div>{row.closed ? <span className="muted">职位已下架</span> : <button className="btn-like" {...{ka: 'personal_interest_cancel_' + row.encryptJobId}} onClick={() => void run(() => toggle(row))}>取消感兴趣</button>}</li>)}</ul><aside className="sider-recommend"><a href="/job_detail/ignored-recommendation.html">侧栏推荐职位（不是收藏）</a></aside></main>;
-  if (standalone) return <main id="job-layout" className="job-page"><a href="/web/geek/chat">← 返回沟通</a><section className="job-banner"><p className="eyebrow">模拟职位详情</p><h1>{selected?.jobName || (fixtures ? '当前模拟账号未找到该职位' : '正在读取职位…')}</h1><p id="job-meta">{detail && [detail.jobInfo.salaryDesc, detail.jobInfo.locationName, detail.jobInfo.experienceName, detail.jobInfo.degreeName].join('　/　')}</p><button id="job-detail-favorite" className={'op-btn-like' + (detail?.relationInfo.interestJob ? ' active' : '')} disabled={!detail} onClick={() => void run(() => toggle())}>{detail?.relationInfo.interestJob ? '取消收藏' : '收藏'}</button></section><section className="sider-company"><h2>公司信息</h2><div className="company-info"><a href="/web/geek/chat">{selected?.brandName}</a></div></section><section className="job-description"><h2>职位描述</h2><p>与团队协作，设计清晰、稳定、易维护的产品体验。这是用于插件开发的虚构职位，支持公司与 JD 浮窗上下文验证。</p></section></main>;
+  if (interest) return <main id="favorites-layout" className="job-page">
+    <nav className="user-jobs-tab-nav"><span className="current" {...{ka: 'personal_top_interest'}}>感兴趣 <span id="favorites-count">{companyFavorites ? favoriteCompanies.length : fixtures?.rows.length || 0}</span></span>
+      <a href="?tab=4&sub=1&tag=4" className={favorites ? 'current' : ''} {...{ka: 'personal_sub_position_focus'}}>职位收藏</a>
+      <a href="?tab=4&sub=2&tag=4" className={companyFavorites ? 'current' : ''} {...{ka: 'personal_sub_company_focus'}}>公司收藏</a>
+    </nav>
+    <ul id="favorites-list" className="user-jobs-ul">{companyFavorites ? favoriteCompanies.map(name => <li key={name} className="company-card">
+      <a className="title" href="/gongsi/job/mock-company~.html">{name}</a><button className="company-card-focus actived" onClick={() => void run(() => toggleCompany(name))}>已收藏</button>
+    </li>) : fixtures?.rows.map(row => <li key={row.encryptJobId} className={'item-boss' + (row.closed ? ' job-closed' : '')} data-job-id={row.encryptJobId}><div className="company-info"><a href="#" {...{ka: 'personal_interest_brand_' + row.encryptBrandId}}>{row.brandName}</a></div><div className="job-info"><a className="name" href={'/job_detail/' + row.encryptJobId + '.html'} target="_blank" rel="noopener noreferrer"><span className="job-name-text">{row.jobName}</span></a></div>{row.closed ? <span className="muted">职位已下架</span> : <button className="btn-like" {...{ka: 'personal_interest_cancel_' + row.encryptJobId}} onClick={() => void run(() => toggle(row))}>取消感兴趣</button>}</li>)}</ul>
+    <aside className="sider-recommend"><a href="/job_detail/ignored-recommendation.html">侧栏推荐职位（不是收藏）</a></aside>
+  </main>;
+  if (standalone) return <main id="job-layout" className="job-page"><a href="/web/geek/chat">← 返回沟通</a><section className="job-banner"><p className="eyebrow">模拟职位详情</p><span className="job-status" hidden={!selected}>{selected?.closed ? '职位已关闭' : '招聘中'}</span><h1>{selected?.jobName || (fixtures ? '当前模拟账号未找到该职位' : '正在读取职位…')}</h1><p id="job-meta">{detail && [detail.jobInfo.salaryDesc, detail.jobInfo.locationName, detail.jobInfo.experienceName, detail.jobInfo.degreeName].join('　/　')}</p><button id="job-detail-favorite" className={'op-btn-like' + (detail?.relationInfo.interestJob ? ' active' : '')} disabled={!detail} onClick={() => void run(() => toggle())}>{detail?.relationInfo.interestJob ? '取消收藏' : '收藏'}</button></section><section className="sider-company"><h2>公司信息</h2><div className="company-info"><a href="/web/geek/chat">{selected?.brandName}</a></div></section><section className="job-description"><h2>职位描述</h2><p>与团队协作，设计清晰、稳定、易维护的产品体验。这是用于插件开发的虚构职位，支持公司与 JD 浮窗上下文验证。</p></section></main>;
+  if (companyJobs) {
+    const company = fixtures?.rows[0]?.brandName;
+    return <main className="job-page">
+      {company && <section className="company-banner"><div className="info-primary"><div className="name"><h1>{company}招聘</h1><button className="icon-focus" onClick={() => void run(() => toggleCompany(company))}>{favoriteCompanies.includes(company) ? '已收藏' : '收藏'}</button></div></div></section>}
+      <ul className="position-job-list">{fixtures?.rows.filter(row => row.brandName === company).map(row => <li key={row.encryptJobId} className={'job-card-box' + (row.encryptJobId === selected?.encryptJobId ? ' active' : '')}>
+        <a className="job-name" href={'/job_detail/' + row.encryptJobId + '.html'} onClick={event => {event.preventDefault(); void run(() => choose(row));}}>{row.jobName}</a>
+      </li>)}</ul>
+    </main>;
+  }
   const preview = selected && fixtures && Object.values(fixtures.cases).includes(selected.encryptJobId) && selected.encryptJobId !== fixtures.cases.existing;
   return <main id="jobs-layout" className="jobs-page" ref={element => {if (element) element.__vue__ = {$options: {name: 'PageJobs'}, jobList: fixtures?.rows || [], currentJob: selected, jobDetail: detail || {}, jobDetailLoading: loading};}}>
     <section><h1>模拟职位列表</h1><p className="muted">选择职位，验证浮窗能高亮当前 JD 并保存备注和状态。</p><label>详情加载 <select id="job-detail-mode" value={mode} onChange={event => setMode(event.target.value)}><option value="normal">立即显示</option><option value="delayed">延迟 1.5 秒，保留上一条详情</option></select></label><div id="job-results">{fixtures?.rows.map(row => <div key={row.encryptJobId} className={'job-card-wrap' + (row.encryptJobId === selected?.encryptJobId ? ' active' : '')} data-job-id={row.encryptJobId} ref={element => {if (element) element.__vue__ = {$options: {name: 'JodCard'}, $props: {data: row, showBottom: true, showJobType: false, isActive: row.encryptJobId === selected?.encryptJobId}};}} onClick={event => {event.preventDefault(); void run(() => choose(row));}}><div className="job-card-box"><a className="job-name" href={'/job_detail/' + row.encryptJobId + '.html'}>{row.jobName}</a><span className="boss-name">{row.brandName}</span></div></div>)}</div></section>

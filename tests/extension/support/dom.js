@@ -5,12 +5,12 @@ const windows = [];
 afterEach(() => {for (const window of windows.splice(0)) window.close();});
 export async function flush() {for (let turn = 0; turn < 4; turn++) await new Promise(resolve => setTimeout(resolve, 0));}
 
-export function browserHarness(source, sendMessage, {confirm = () => true, url = 'https://www.zhipin.com/web/geek/chat', html = '<!doctype html><html><body><div id="root"></div></body></html>', storage} = {}) {
+export function browserHarness(source, sendMessage, {confirm = () => true, url = 'https://www.zhipin.com/web/geek/chat', html = '<!doctype html><html><body><div id="root"></div></body></html>', storage, setup} = {}) {
   const dom = new JSDOM(html, {url, runScripts: 'outside-only', pretendToBeVisual: true});
   const {window} = dom;
   windows.push(window);
   const output = [], calls = [];
-  let listener, tick;
+  let listener, runtimeListener, tick;
   const addListener = window.addEventListener.bind(window);
   window.addEventListener = (name, handler, options) => {if (name === 'message') listener = handler; addListener(name, handler, options);};
   window.postMessage = event => output.push(event.data);
@@ -22,7 +22,7 @@ export function browserHarness(source, sendMessage, {confirm = () => true, url =
     const promise = Promise.resolve(sendMessage(structuredClone(message))).then(value => structuredClone(value));
     calls.push(promise);
     return promise;
-  }, onMessage: {addListener() {}}}};
+  }, onMessage: {addListener(handler) {runtimeListener = handler;}}}};
   window.HTMLElement.prototype.emit = async function(name) {
     const start = calls.length;
     if (name === 'input' || name === 'change') this._valueTracker?.setValue('__previous_value__');
@@ -31,10 +31,12 @@ export function browserHarness(source, sendMessage, {confirm = () => true, url =
     await Promise.all(calls.slice(start));
     await flush();
   };
+  setup?.(window);
   window.eval(source);
   return {
     window, document: window.document, output, calls,
     widget: () => window.document.getElementById('boss-local-helper-widget'),
+    notify: async data => {runtimeListener?.(data); await new Promise(resolve => setTimeout(resolve, 210)); await flush();},
     tick: async () => {tick?.(); await flush();},
     visibility: async hidden => {Object.defineProperty(window.document, 'hidden', {configurable: true, value: hidden}); window.document.dispatchEvent(new window.Event('visibilitychange')); await flush();},
     deliver: async data => {await listener({source: window, origin: window.location.origin, data: {channel: 'boss-local-helper-v1', direction: 'to-extension', data}}); await flush();},

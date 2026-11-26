@@ -1,5 +1,7 @@
 import type {ExternalRecord} from './types.ts';
 import {syncIntervalSeconds} from './sync-interval.ts';
+import {validActivityWindow, withinActivityWindow} from './activity-window.ts';
+import {isCompanyJobsPath} from './company-jobs.ts';
 type Progress = (running: boolean, message: string) => Promise<void>;
 
 (() => {
@@ -19,7 +21,8 @@ type Progress = (running: boolean, message: string) => Promise<void>;
     const date=Date.parse(raw);return Number.isFinite(date)?Math.max(0,date-Date.now()):0;
   }
   const pendingWrites=new Map<string, {account: string; runId?: string; timer: ReturnType<typeof setTimeout>; resolve: () => void; reject: (error: Error) => void}>();
-  const pendingUnfavorites=new Map<string, {row: {jobId: string; title: string; companyName: string; favorite: boolean}; account: Promise<string | undefined>; time: number}>();
+  const pendingUnfavorites=new Map<string, {row: NonNullable<ReturnType<typeof favoriteRow>>; account: Promise<string | undefined>; time: number}>();
+  const pendingCompanyUnfavorites=new Map<string, {account: Promise<string | undefined>; time: number}>();
   function persist(data: ExternalRecord) {
     const requestId=crypto.randomUUID();
     return new Promise<void>((resolve,reject)=>{
@@ -44,7 +47,8 @@ type Progress = (running: boolean, message: string) => Promise<void>;
     const uid=user?.userId || window._PAGE?.uid;
     if (!uid) return null;
     const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode((isMock?'boss:mock:':'boss:')+String(uid)));
-    return {id:[...new Uint8Array(bytes)].map(b=>b.toString(16).padStart(2,'0')).join('').slice(0,24),uid:String(uid)};
+    const name=text(user?.name,120).trim() || (String(window._PAGE?.uid)===String(uid) ? text(window._PAGE?.name,120).trim() : '');
+    return {id:[...new Uint8Array(bytes)].map(b=>b.toString(16).padStart(2,'0')).join('').slice(0,24),uid:String(uid),name};
   }
   function rows() {
     const vue=allVue();
@@ -76,7 +80,7 @@ type Progress = (running: boolean, message: string) => Promise<void>;
     let now=performance.now();
     const deadline=isMock?0:Math.max(lastRequest===null?0:lastRequest+intervalSeconds*1000,cooldownUntil);
     if(now<deadline){
-      await progress(true,now<cooldownUntil?'已完成 20 次主动请求，休息 20 秒；可随时停止':'主动请求间隔至少 '+intervalSeconds+' 秒，正在等待；可随时停止');
+      await progress(true,now<cooldownUntil?'已完成 20 次主动请求，休息 20 秒；可随时停止':'主动请求至少间隔 '+intervalSeconds+' 秒，正在等待；可随时停止');
       while((now=performance.now())<deadline)await wait(deadline-now,signal);
     }
     if(signal.aborted)throw new Error('用户已停止');
@@ -110,10 +114,29 @@ type Progress = (running: boolean, message: string) => Promise<void>;
     const visible=(node: Element | null)=>node&&(!node.getClientRects||node.getClientRects().length>0);
     const select=(root: ParentNode,selector: string)=>[...root.querySelectorAll(selector)].find(visible);
     const value=(root: ParentNode,selector: string,limit: number)=>text([...root.querySelectorAll(selector)].find(node=>visible(node)&&node.textContent?.trim())?.textContent?.trim(),limit);
+    function jobIdFromLink(link: Element | undefined) {
+      if(!link)return '';
+      try {
+        const url=new URL(link.getAttribute('href')||'',location.origin);
+        if(url.origin===location.origin)return url.pathname.match(/^\/job_detail\/([a-zA-Z0-9_-]{1,150})\.html$/)?.[1]||'';
+      }catch{}
+      return '';
+    }
     if(/^\/job_detail\//.test(location.pathname)){
       const label=select(document,'.job-banner .op-btn-like, .job-banner .btn-interest')?.textContent?.trim();
       const favorite=/^(取消收藏|取消感兴趣|已收藏)$/.test(label||'')?true:/^(收藏|感兴趣)$/.test(label||'')?false:undefined;
-      return {jobId:location.pathname.split('/').pop()!.replace(/\.html$/,''),companyName:value(document,'.sider-company .company-info a, .job-company .company-name',180),title:value(document,'.job-banner h1',200),...(typeof favorite==='boolean'?{favorite}:{})};
+      const availability=value(document,'.job-banner .job-status',60);
+      const jobClosed=/^(?:该)?职位已(?:关闭|下架)$/.test(availability)?true:availability==='招聘中'?false:undefined;
+      return {jobId:location.pathname.split('/').pop()!.replace(/\.html$/,''),companyName:value(document,'.sider-company .company-info a, .job-company .company-name',180),title:value(document,'.job-banner h1',200),...(typeof favorite==='boolean'?{favorite}:{}),...(typeof jobClosed==='boolean'?{jobClosed}:{})};
+    }
+    if(isCompanyJobsPath(location.pathname)){
+      const companyName=value(document,'.company-banner .info-primary .name h1',200).replace(/招聘$/,'').trim().slice(0,180);
+      const card=select(document,'.position-job-list .job-card-box.active');
+      const link=card&&select(card,'a.job-name[href*="/job_detail/"]');
+      const jobId=jobIdFromLink(link);
+      const label=select(document,'.company-banner .icon-focus')?.textContent?.trim();
+      const companyFavorite=label==='已收藏'||label==='取消收藏'?true:label==='收藏'?false:undefined;
+      return {companyName,jobId,title:jobId?text(link?.textContent?.trim(),200):'',...(companyName&&typeof companyFavorite==='boolean'?{companyFavorite}:{})};
     }
     if(!/^\/web\/geek\/jobs\/?$/.test(location.pathname))return null;
     const detail=select(document,'.job-detail-box')||select(document,'.job-detail-container, .job-detail');
@@ -126,8 +149,7 @@ type Progress = (running: boolean, message: string) => Promise<void>;
     const cardTitle=card&&value(card,'.job-name',200)||text(selected.jobName,200);
     const cardCompany=card&&value(card,'.company-name, .boss-name',180)||text(selected.brandName,180);
     const link=card&&select(card,'a[href*="/job_detail/"]');
-    let jobId=text(selected.encryptJobId,150);
-    if(!jobId&&link){try{const url=new URL(link.getAttribute('href') || '',location.origin);if(url.origin===location.origin)jobId=url.pathname.match(/^\/job_detail\/([^/]+)\.html$/)?.[1]||'';}catch{}}
+    let jobId=text(selected.encryptJobId,150)||jobIdFromLink(link);
     const detailId=text(info.encryptJobId||info.encryptId,150);
     const matches=!jobId||!detailId||jobId===detailId;
     const title=cardTitle||(matches?value(detail,'.job-name, .job-title, h1',200)||text(info.jobName,200):'');
@@ -141,28 +163,48 @@ type Progress = (running: boolean, message: string) => Promise<void>;
       const link=node.querySelector('.job-info a.name');
       if(!company||!link)return null;
       let jobId;try{const url=new URL(link.getAttribute('href') || '',location.origin);if(url.origin!==location.origin)return null;jobId=url.pathname.match(/^\/job_detail\/([a-zA-Z0-9_-]{1,150})\.html$/)?.[1];}catch{return null;}
-      const title=text(node.querySelector('.job-name-text')?.textContent?.trim(),200),companyName=text(company.textContent?.trim(),180);
-      return jobId&&title&&companyName?{jobId,title,companyName,favorite:true}:null;
+      const title=text(node.querySelector('.job-name-text')?.textContent?.trim()||link.textContent?.trim(),200),companyName=text(company.textContent?.trim(),180);
+      return jobId&&title&&companyName?{jobId,title,companyName,favorite:true,jobClosed:node.classList?.contains('job-closed')===true}:null;
   }
   function favoriteRows(){
     if(location.pathname!=='/web/geek/recommend'||!document.querySelector('[ka="personal_top_interest"].current')||!document.querySelector('[ka="personal_sub_position_focus"].current'))return null;
     return [...document.querySelectorAll('.user-jobs-ul .item-boss')].map(favoriteRow).filter((value): value is NonNullable<typeof value> => Boolean(value));
   }
+  function companyFavoriteRows(){
+    if(location.pathname!=='/web/geek/recommend'||!document.querySelector('[ka="personal_top_interest"].current')||!document.querySelector('[ka="personal_sub_company_focus"].current'))return null;
+    return [...document.querySelectorAll('.user-jobs-ul .company-card')].flatMap(card=>{
+      const companyName=text(card.querySelector('a.title')?.textContent?.trim(),180);
+      const button=card.querySelector('.company-card-focus');
+      return companyName&&button?[{companyName,favorite:button.classList.contains('actived')}]:[];
+    });
+  }
   async function snapshot() {
     const a=await account();if(!a)return;
+    const companies=companyFavoriteRows();
+    if(companies){
+      for(const [companyName,pending] of pendingCompanyUnfavorites){
+        if(await pending.account!==a.id||Date.now()-pending.time>15000){pendingCompanyUnfavorites.delete(companyName);continue;}
+        const entry=companies.find(row=>row.companyName===companyName);
+        if(!entry)companies.push({companyName,favorite:false});
+        if(!entry?.favorite)pendingCompanyUnfavorites.delete(companyName);
+      }
+      const data={type:'COMPANY_FAVORITES',account:a.id,accountName:a.name,rows:companies};
+      if((await account())?.id!==a.id)return;
+      const signature=JSON.stringify(data);if(signature!==lastSnapshot){lastSnapshot=signature;post(data);}return;
+    }
     const favorites=favoriteRows();
     if(favorites){
       for(const [id,pending] of pendingUnfavorites){
         if(await pending.account!==a.id||Date.now()-pending.time>15000){pendingUnfavorites.delete(id);continue;}
         if(!favorites.some(row=>row.jobId===id)){favorites.push({...pending.row,favorite:false});pendingUnfavorites.delete(id);}
       }
-      const data={type:'FAVORITES',account:a.id,rows:favorites};
+      const data={type:'FAVORITES',account:a.id,accountName:a.name,rows:favorites};
       if((await account())?.id!==a.id)return;
       const signature=JSON.stringify(data);if(signature!==lastSnapshot){lastSnapshot=signature;post(data);}return;
     }
     const page=jobPageContext();
     if(page){
-      const data={type:'PAGE_CONTEXT',account:a.id,...page};
+      const data={type:'PAGE_CONTEXT',account:a.id,accountName:a.name,...page};
       if((await account())?.id!==a.id)return;
       const signature=JSON.stringify(data);if(signature!==lastSnapshot){lastSnapshot=signature;post(data);}return;
     }
@@ -171,16 +213,18 @@ type Progress = (running: boolean, message: string) => Promise<void>;
     const record=document.querySelector('.chat-record')?.__vue__;
     const selected=list.rows.find(r=>String(r.encryptBossId)===String(record?.boss?.encryptBossId));
     const live=[...document.querySelectorAll('.message-item')].map(e=>{const m=e.__vue__?.$props?.message;if(!m)return null;const parts=[m.text,m.lastText,m.dialog?.title,m.dialog?.content,m.dialog?.text,...(Array.isArray(m.articles)?m.articles.map((a: ExternalRecord)=>a.title):[])].filter(x=>typeof x==='string'&&x.trim());return{id:String(m.mid||''),time:Number(m.time)||0,type:m.type,bodyType:m.bodyType,templateId:m.templateId,messageType:m.messageType,isSystem:e.classList.contains('item-system'),direction:typeof m.isSelf==='boolean'?(m.isSelf?'out':'in'):'unknown',directionBasis:typeof m.isSelf==='boolean'?'page':'unknown',status:Number.isFinite(Number(m.status))?Number(m.status):null,text:[...new Set(parts)].join('\n').slice(0,6000)};}).filter(Boolean);
-    const data={type:'SNAPSHOT',account:a.id,rows:list.rows.map(cleanRow),listEnded:list.listEnded,loading:list.loading,selectedId:selected?String(selected.encryptBossId):null,liveMessages:live};
+    const data={type:'SNAPSHOT',account:a.id,accountName:a.name,rows:list.rows.map(cleanRow),listEnded:list.listEnded,loading:list.loading,selectedId:selected?String(selected.encryptBossId):null,liveMessages:live};
     if((await account())?.id!==a.id)return;
     const signature=JSON.stringify(data);
     if(signature!==lastSnapshot){lastSnapshot=signature;post(data);
       if(selected&&live.length)post({type:'CONVERSATION',account:a.id,row:cleanRow(selected),messages:live});
     }
   }
-  async function collect(commandId: string,expectedAccount: string,runId: string,requestedInterval: unknown) {
-    if(syncing){post({type:'COMMAND_RESULT',commandId,ok:false,error:'已有更新正在进行'});return;}
-    if(!runId){post({type:'COMMAND_RESULT',commandId,ok:false,error:'缺少同步任务标识'});return;}
+  async function collect(commandId: string,expectedAccount: string,runId: string,requestedInterval: unknown,requestedWindow: unknown) {
+    if(syncing){post({type:'COMMAND_RESULT',commandId,ok:false,error:'已有采集正在进行'});return;}
+    if(!runId){post({type:'COMMAND_RESULT',commandId,ok:false,error:'缺少采集任务标识'});return;}
+    if(requestedWindow!=null&&!validActivityWindow(requestedWindow)){post({type:'COMMAND_RESULT',commandId,ok:false,error:'无效采集日期范围'});return;}
+    const windowRange=validActivityWindow(requestedWindow)?requestedWindow:null;
     syncing=true;stopped=false;activeRunId=runId;runController=new AbortController();
     const intervalSeconds=syncIntervalSeconds(requestedInterval);
     const pacing='主动请求至少间隔 '+intervalSeconds+' 秒，每 20 次休息 20 秒';
@@ -193,33 +237,42 @@ type Progress = (running: boolean, message: string) => Promise<void>;
       if(performance.now()<blockedUntil)throw new Error('上次采集遇到异常，请先检查页面，至少等待 '+Math.ceil((blockedUntil-performance.now())/1000)+' 秒后重试');
       // A newly opened tab waits before its first request as well, including after switching tabs.
       if(lastRequest===null)lastRequest=performance.now();
-      progress=(running,message)=>persist({type:'SYNC_PROGRESS',account:a.id,runId,sync:{running,processed,total:list.rows.length,failed,complete:!running&&!stopped&&!failed&&!incomplete&&list.listEnded,coverage:'网页已加载列表；无法证明账号全量',message,updatedAt:Date.now()}});
+      const candidates=list.rows.filter(row=>!windowRange?.start||!(Number(row.lastTS)>0)||Number(row.lastTS)>=windowRange.start);
+      const total=candidates.length;
+      progress=(running,message)=>persist({type:'SYNC_PROGRESS',account:a.id,runId,sync:{running,processed,total,failed,complete:!running&&!stopped&&!failed&&!incomplete&&list.listEnded,coverage:windowRange?'所选日期内的已加载会话':'当前页已加载会话（不含未加载历史）',message,updatedAt:Date.now()}});
       await progress(true,isMock?'正在读取本地模拟会话，可随时停止':'正在读取已加载会话：'+pacing+'，可随时停止');
       started=true;post({type:'COMMAND_RESULT',commandId,ok:true});
-      for(const row of list.rows) {
+      for(const row of candidates) {
         if(stopped)break;
-        if((await account())?.id!==a.id)throw new Error('账号已切换，更新已停止');
+        if((await account())?.id!==a.id)throw new Error('账号已切换，采集已停止');
         const base={bossId:row.encryptBossId,securityId:row.securityId};
-        const messages=[],seen=new Set(),cursors=new Set();let hasMore=true,cursor=0,pages=0,detail={};
+        const seen=new Set(),cursors=new Set();let hasMore=true,reachedStart=false,cursor=0,pages=0,detail={},lastTime=Infinity,ordered=true;
         try {
           const rawDetail=await get('/wapi/zpchat/geek/getBossData',{...base,bossSource:0},a.id,progress,intervalSeconds);
           if(!rawDetail.data||typeof rawDetail.data!=='object'||!rawDetail.job||typeof rawDetail.job!=='object')throw new Error('会话详情响应结构异常');
           detail=cleanDetail(rawDetail);
-          while(hasMore&&!stopped&&pages<100) {
+          while(hasMore&&!reachedStart&&!stopped&&pages<100) {
             const current=await get('/wapi/zpchat/geek/historyMsg',{...base,maxMsgId:cursor,c:20,page:pages+1,src:0},a.id,progress,intervalSeconds);
             if(stopped)break;
             if(!Array.isArray(current?.messages)||typeof current.hasMore!=='boolean')throw new Error('历史响应结构变化');
-            for(const message of current.messages){const m=cleanMessage(message,a.uid);if(m.id&&!seen.has(m.id)){seen.add(m.id);messages.push(m);}}
+            const messages=(current.messages as ExternalRecord[]).map(message=>cleanMessage(message,a.uid)).filter(message=>{
+              if(!windowRange)return true;
+              ordered &&= message.time>0&&message.time<=lastTime;
+              lastTime=message.time;
+              return withinActivityWindow(message.time,windowRange);
+            });
+            for(const message of messages)if(message.id)seen.add(message.id);
             pages++;hasMore=current.hasMore;
+            reachedStart=!!(windowRange?.start&&current.messages.length&&ordered&&lastTime<windowRange.start);
             // Advance only after the background transaction has committed this page.
-            await persist({type:'CONVERSATION',account:a.id,runId,row:cleanRow(row),detail,messages:current.messages.map((m: ExternalRecord)=>cleanMessage(m,a.uid)),history:{runId,pages,serverReportsEnd:!hasMore,continuousFromStart:true,count:messages.length,updatedAt:Date.now()}});
-            if(hasMore){const next=current.minMsgId;if(!next||cursors.has(String(next)))throw new Error('历史游标停滞，已保留当前页');cursors.add(String(next));cursor=next;}
+            await persist({type:'CONVERSATION',account:a.id,runId,row:cleanRow(row),detail,messages,history:{runId,pages,serverReportsEnd:!hasMore,continuousFromStart:true,count:seen.size,updatedAt:Date.now()}});
+            if(hasMore&&!reachedStart){const next=current.minMsgId;if(!next||cursors.has(String(next)))throw new Error('历史游标停滞，已保留当前页');cursors.add(String(next));cursor=next;}
           }
-          if(hasMore)incomplete++;
+          if(hasMore&&!reachedStart)incomplete++;
         }catch(error: any){if(!stopped)post({type:'SYNC_ERROR',account:a.id,runId,conversationId:String(row.encryptBossId),error:String(error.message).slice(0,250)});throw error;}
-        processed++;await progress(true,isMock?`已处理 ${processed}/${list.rows.length} 个本地模拟会话`:`已处理 ${processed}/${list.rows.length} 个会话；${pacing}`);
+        processed++;await progress(true,isMock?`已处理 ${processed}/${total} 个本地模拟会话`:`已处理 ${processed}/${total} 个会话；${pacing}`);
       }
-      await progress(false,stopped?'已停止；已保存内容仍在本地':`更新结束：${processed} 个会话，${failed} 个失败，${incomplete} 个历史未读完。范围为网页当前列表。`);
+      await progress(false,stopped?'已停止；已保存内容仍在本地':`更新结束：${processed} 个会话，${failed} 个失败，${incomplete} 个历史未读完。`);
     }catch(error: any){
       if(!stopped){failed++;if(started)blockFor(60000);}
       const retryNote=!stopped&&performance.now()<blockedUntil?'；请检查页面，至少等待 '+Math.ceil((blockedUntil-performance.now())/1000)+' 秒后再试':'';
@@ -259,21 +312,35 @@ type Progress = (running: boolean, message: string) => Promise<void>;
       const p=pendingWrites.get(data.requestId);
       if(p&&p.account===data.account&&p.runId===data.runId){clearTimeout(p.timer);pendingWrites.delete(data.requestId);if(data.ok)p.resolve();else p.reject(new Error(data.error||'本地保存失败'));}
     }
-    if(data.type==='SYNC')collect(data.commandId,data.account,data.runId,data.intervalSeconds);
+    if(data.type==='SYNC')collect(data.commandId,data.account,data.runId,data.intervalSeconds,data.activityWindow);
     if(data.type==='STOP_SYNC'){
       const matches=syncing&&activeRunId===data.runId;
       if(matches){stopped=true;runController?.abort();activeController?.abort();}
-      post({type:'COMMAND_RESULT',commandId:data.commandId,ok:matches,error:matches?undefined:'该同步任务已不在此页面运行'});
+      post({type:'COMMAND_RESULT',commandId:data.commandId,ok:matches,error:matches?undefined:'该采集任务已不在此页面运行'});
     }
     if(data.type==='SNAPSHOT')snapshot().catch(()=>{});
   });
   let timer: ReturnType<typeof setTimeout> | undefined;
   document.addEventListener('click',event=>{
-    const action=(event.target as Element | null)?.closest?.('[ka^="personal_interest_cancel_"]'),node=action?.closest('.item-boss');
+    const target=event.target as Element | null;
+    const companyAction=target?.closest?.('.company-card-focus.actived');
+    if(companyAction&&companyFavoriteRows()!==null){
+      const companyName=text(companyAction.closest('.company-card')?.querySelector('a.title')?.textContent?.trim(),180);
+      if(companyName)pendingCompanyUnfavorites.set(companyName,{account:account().then(value=>value?.id),time:Date.now()});
+    }
+    const action=target?.closest?.('[ka^="personal_interest_cancel_"]'),node=action?.closest('.item-boss');
     if(!node||favoriteRows()===null)return;
     const row=favoriteRow(node);if(row)pendingUnfavorites.set(row.jobId,{row,account:account().then(value=>value?.id),time:Date.now()});
   },true);
   function schedule(){clearTimeout(timer);timer=setTimeout(()=>snapshot().catch(()=>{}),700);}
-  function start(){if(observing)return;observing=true;new MutationObserver(schedule).observe(document.documentElement,{childList:true,subtree:true,characterData:true});schedule();setInterval(()=>snapshot().catch(()=>{}),5000);}
+  function start(){
+    if(observing)return;
+    observing=true;
+    new MutationObserver(schedule).observe(document.documentElement,{childList:true,subtree:true,characterData:true});
+    if(isCompanyJobsPath(location.pathname)||location.pathname==='/web/geek/recommend')new MutationObserver(records=>{
+      if(records.some(({target})=>target instanceof Element&&target.matches('.position-job-list .job-card-box, .company-card-focus, .company-banner .icon-focus, [ka="personal_sub_company_focus"]')))schedule();
+    }).observe(document.documentElement,{attributes:true,subtree:true,attributeFilter:['class']});
+    schedule();setInterval(()=>snapshot().catch(()=>{}),5000);
+  }
   if(document.documentElement)start();else document.addEventListener('DOMContentLoaded',start,{once:true});
 })();

@@ -38,6 +38,15 @@ test('only system flags or known legacy signatures identify system labels',()=>{
   for(const text of ['例如“附件简历请求已发送”','我说过您的附件简历已发送给Boss']) assert.notEqual(inferStatus({},[system(text,1)]).status,'resume_event');
   for(const text of ['您的附件简历未发送给Boss','对方没有查看您的附件简历','附件简历发送失败']) assert.equal(inferStatus({},[system(text,1)]).label,text);
 });
+test('竞争分析卡片和列表摘要不能产生待回复，也不能覆盖真人消息',()=>{
+  const text='你与该职位竞争者PK情况';
+  const preview={lastText:text,lastIsSelf:false,lastMessageAt:20};
+  const card=msg(text,20,{type:4,bodyType:16,templateId:1,direction:'in',isSystem:false});
+  assert.equal(inferStatus(preview).status,'unknown');
+  assert.equal(inferStatus(preview,[card]).status,'unknown');
+  assert.equal(inferStatus(preview,[msg('您好',10,{direction:'out'}),card]).status,'awaiting_boss');
+});
+
 test('只比较特殊状态的先后，之后的普通对话和列表新消息均不能覆盖',()=>{
   const special=[system('附件简历请求已发送',10),system('对方已查看了您的附件简历',20)];
   for(const [direction,lastIsSelf] of [['in',false],['out',true]]){

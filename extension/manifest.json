@@ -1,15 +1,29 @@
 {
   "manifest_version": 3,
-  "name": "BOSS 沟通助手 · 本地版",
-  "version": "0.3.2",
-  "description": "在本地整理 BOSS 对话、公司与 JD，在浮窗修改状态并记录公司、职位备注。",
+  "name": "BoDesk",
+  "version": "0.9.0",
+  "description": "本地优先的 BOSS 求职沟通工作台：在浮窗与 JD 看板中整理公司、职位、沟通状态、收藏与备注，支持聊天记录采集与 JSON 备份。",
+  "icons": {
+    "16": "assets/icon-16.png",
+    "32": "assets/icon-32.png",
+    "48": "assets/icon-48.png",
+    "128": "assets/icon-128.png"
+  },
   "permissions": ["storage", "tabs", "alarms"],
   "host_permissions": ["https://www.zhipin.com/*", "http://127.0.0.1:4173/*", "http://localhost:4173/*"],
   "background": {"service_worker": "dist/background.js", "type": "module"},
-  "action": {"default_title": "打开 JD 看板"},
+  "action": {
+    "default_title": "BoDesk · 打开 JD 看板",
+    "default_icon": {
+      "16": "assets/icon-16.png",
+      "32": "assets/icon-32.png",
+      "48": "assets/icon-48.png",
+      "128": "assets/icon-128.png"
+    }
+  },
   "content_scripts": [
-    {"matches": ["https://www.zhipin.com/web/*", "https://www.zhipin.com/job_detail/*", "http://127.0.0.1:4173/web/*", "http://127.0.0.1:4173/job_detail/*", "http://localhost:4173/web/*", "http://localhost:4173/job_detail/*"], "js": ["dist/main.js"], "world": "MAIN", "run_at": "document_start"},
-    {"matches": ["https://www.zhipin.com/web/*", "https://www.zhipin.com/job_detail/*", "http://127.0.0.1:4173/web/*", "http://127.0.0.1:4173/job_detail/*", "http://localhost:4173/web/*", "http://localhost:4173/job_detail/*"], "js": ["dist/content.js"], "css": ["dist/content.css"], "run_at": "document_start"}
+    {"matches": ["https://www.zhipin.com/web/*", "https://www.zhipin.com/job_detail/*", "https://www.zhipin.com/gongsi/job/*.html*", "http://127.0.0.1:4173/web/*", "http://127.0.0.1:4173/job_detail/*", "http://127.0.0.1:4173/gongsi/job/*.html*", "http://localhost:4173/web/*", "http://localhost:4173/job_detail/*", "http://localhost:4173/gongsi/job/*.html*"], "js": ["dist/main.js"], "world": "MAIN", "run_at": "document_start"},
+    {"matches": ["https://www.zhipin.com/web/*", "https://www.zhipin.com/job_detail/*", "https://www.zhipin.com/gongsi/job/*.html*", "http://127.0.0.1:4173/web/*", "http://127.0.0.1:4173/job_detail/*", "http://127.0.0.1:4173/gongsi/job/*.html*", "http://localhost:4173/web/*", "http://localhost:4173/job_detail/*", "http://localhost:4173/gongsi/job/*.html*"], "js": ["dist/content.js"], "css": ["dist/content.css"], "run_at": "document_start"}
   ],
   "web_accessible_resources": [{"resources": ["dist/assets/*.woff2"], "matches": ["https://www.zhipin.com/*", "http://127.0.0.1/*", "http://localhost/*"]}],
   "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'"}

@@ -1,46 +1,60 @@
-import {Fragment, useEffect, useRef, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
+import type {CSSProperties} from 'react';
 import {createRoot} from 'react-dom/client';
-import {JobBoard} from './job-board.tsx';
+import {Gear, Loader} from 'reicon';
+import {ActivityRange, boardActivityWindow, JobBoard, useBoardPreferences} from './job-board.tsx';
+import {DashboardSelect} from './dashboard-select.tsx';
+import {Icon} from './icon.tsx';
+import {backupText} from './backup.ts';
 import type {DatabaseSnapshot, ExternalRecord} from './types.ts';
 import {syncInterval, syncIntervalSeconds} from './sync-interval.ts';
 import './typography.css';
 import '../dashboard.css';
 
 const text = (value: unknown, fallback = '') => value == null || value === '' ? fallback : String(value);
-const describe = (value: unknown) => value == null || value === '' ? '未提供' : typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+function describe(value: unknown) {
+  if (value == null || value === '') return '未提供';
+  if (typeof value === 'boolean') return value ? '是' : '否';
+  return typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+}
 const records = (value: unknown): ExternalRecord[] => Array.isArray(value) ? value.filter(row => row && typeof row === 'object' && !Array.isArray(row)) : [];
-const isBoardView = () => location.hash === '#board';
 function formatTime(value: unknown) {
   if (typeof value !== 'number' && typeof value !== 'string') return '未记录';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? text(value) : date.toLocaleString('zh-CN', {hour12: false});
 }
-const names: Record<string, string> = {running: '正在运行', complete: '本次任务结束', processed: '已处理', total: '本次会话数', failed: '失败数', updatedAt: '更新时间', startedAt: '开始时间', finishedAt: '结束时间', coverage: '覆盖范围', message: '说明', runId: '任务标识'};
+const names: Record<string, string> = {running: '运行中', complete: '本次采集完成', processed: '已处理会话', total: '总会话数', failed: '失败数', updatedAt: '更新时间', startedAt: '开始时间', finishedAt: '结束时间', coverage: '覆盖范围', message: '说明', runId: '任务标识'};
 
 function Dashboard() {
   const [db, setDb] = useState<DatabaseSnapshot | null>(null);
-  const [showBoard, setShowBoard] = useState(isBoardView);
+  const board = useBoardPreferences();
+  const importInput = useRef<HTMLInputElement>(null);
+  const intervalInput = useRef<HTMLInputElement>(null);
+  const intervalWrite = useRef<Promise<boolean> | null>(null);
   const [busy, setBusy] = useState(true);
   const [syncRequested, setSyncRequested] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [pendingAction, setPendingAction] = useState<'import' | 'export' | 'account' | null>(null);
+  const [savingInterval, setSavingInterval] = useState(false);
   const [intervalDraft, setIntervalDraft] = useState<{account: string; seconds: number} | null>(null);
-  const [feedback, setFeedback] = useState({message: '正在读取本地记录…', error: false});
-  const state = useRef({account: null as string | null, busy: true, stopping: false, syncRequested: false, db: null as DatabaseSnapshot | null, mounted: true, generation: 0});
-  const notify = (message: string, error = false) => {if (state.current.mounted) setFeedback({message, error});};
+  const [feedback, setFeedback] = useState<{message: string; error: boolean; pending?: boolean}>({message: '正在读取本地记录…', error: false, pending: true});
+  const state = useRef({account: new URLSearchParams(location.search).get('account') || null, busy: true, stopping: false, syncRequested: false, db: null as DatabaseSnapshot | null, mounted: true, generation: 0, dirty: false});
+  const notify = (message: string, error = false, pending = false) => {if (state.current.mounted) setFeedback({message, error, pending});};
   const markBusy = (value: boolean) => {state.current.busy = value; if (state.current.mounted) setBusy(value);};
   async function request(message: ExternalRecord, account = state.current.account) {
-    if (!globalThis.chrome?.runtime?.sendMessage) throw new Error('请从已加载的 Chrome 扩展中打开此页面。');
+    if (!globalThis.chrome?.runtime?.sendMessage) throw new Error('请在已加载的 BoDesk 扩展中打开此页面');
     if (['DB_GET', 'EXPORT', 'SYNC', 'STOP_SYNC', 'SET_SYNC_INTERVAL'].includes(message.type) && (message.type !== 'DB_GET' || account !== null)) message = {...message, account};
     const response = await chrome.runtime.sendMessage(message);
-    if (!response?.ok) {const reason = response?.error?.message || response?.error || response?.message; throw new Error(typeof reason === 'string' ? reason : '扩展未返回成功结果，请稍后重试。');}
-    if (account && ['DB_GET', 'EXPORT'].includes(message.type) && response.data && response.data.account !== account) throw new Error('返回数据的账号与所选账号不一致，请重新选择账号后重试。');
+    if (!response?.ok) {const reason = response?.error?.message || response?.error || response?.message; throw new Error(typeof reason === 'string' ? reason : '扩展未返回有效结果，请稍后重试');}
+    if (account && ['DB_GET', 'EXPORT'].includes(message.type) && response.data && response.data.account !== account) throw new Error('返回数据的账号与所选账号不一致，请重新选择账号后重试');
     return response;
   }
   async function load(account = state.current.account) {
     const generation = ++state.current.generation;
     const response = await request({type: 'DB_GET'}, account);
     const data = response.data;
-    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('本地数据格式异常，请刷新重试。');
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('本地数据格式异常，请刷新重试');
     if (!state.current.mounted || generation !== state.current.generation) return;
     const nextAccount: string | null = data.account ?? null;
     const accounts = new Set<string>(Array.isArray(data.accounts) ? data.accounts.filter((value: unknown) => typeof value === 'string' && value) : []);
@@ -48,6 +62,10 @@ function Dashboard() {
     const snapshot: DatabaseSnapshot = {
       account: nextAccount,
       accounts: [...accounts],
+      accountNames: Object.fromEntries([...accounts].flatMap(id => {
+        const name = data.accountNames?.[id];
+        return typeof name === 'string' && name.trim() ? [[id, name.trim()]] : [];
+      })),
       conversations: records(data.conversations),
       jobs: records(data.jobs),
       companies: records(data.companies),
@@ -58,7 +76,7 @@ function Dashboard() {
     state.current.db = snapshot;
     setDb(snapshot);
   }
-  const errorText = (error: unknown) => error instanceof Error ? error.message : '操作失败，请重试。';
+  const errorText = (error: unknown) => error instanceof Error ? error.message : '操作失败，请重试';
   async function action(work: () => Promise<void>) {
     if (state.current.busy || state.current.stopping) return;
     markBusy(true);
@@ -73,146 +91,226 @@ function Dashboard() {
       await request(message, account);
       try {
         await load(account);
-        notify(Object.hasOwn(message, 'status') ? '已保存状态。' : '已保存备注。');
+        notify(Object.hasOwn(message, 'status') ? '已保存状态' : '已保存备注');
       } catch (error) {notify('已保存，刷新记录失败：' + errorText(error), true);}
     } finally {markBusy(false);}
   }
   async function sync() {
     await action(async () => {
-      state.current.syncRequested = true; setSyncRequested(true); notify('正在请求采集…');
-      try {await request({type: 'SYNC'}); await load(); if (!state.current.stopping) notify('已发送采集请求。');}
+      if (intervalWrite.current && !await intervalWrite.current) return;
+      state.current.syncRequested = true; setSyncRequested(true); notify('');
+      try {await request({type: 'SYNC', activityWindow: boardActivityWindow(board.preferences, Date.now())}); await load(); if (!state.current.stopping) notify('');}
       finally {state.current.syncRequested = false; setSyncRequested(false);}
     });
   }
   async function stop() {
     if (state.current.stopping || !(state.current.syncRequested || (!state.current.busy && state.current.db?.sync.running))) return;
-    state.current.stopping = true; setStopping(true); notify('正在请求停止采集…');
-    try {await request({type: 'STOP_SYNC'}); await load(); notify('已发送停止请求，已保存的记录仍可查看。');}
-    catch (error) {notify('停止或刷新失败：' + errorText(error) + '。请刷新确认同步状态。', true);}
+    state.current.stopping = true; setStopping(true); notify('正在请求停止采集…', false, true);
+    try {await request({type: 'STOP_SYNC'}); await load(); notify('已发送停止请求，已保存的记录仍可查看');}
+    catch (error) {notify('停止采集失败：' + errorText(error), true);}
     finally {state.current.stopping = false; setStopping(false);}
   }
   async function selectAccount(account: string) {
     if (!account || state.current.syncRequested || account === state.current.account) return;
-    await action(async () => {notify('正在切换账号并读取记录…'); await request({type: 'SELECT_ACCOUNT', account}); await load(account); setIntervalDraft(null); notify('已切换账号，当前操作与导出均使用所选账号。');});
-  }
-  async function saveInterval() {
-    const account = state.current.account;
-    if (!intervalDraft || intervalDraft.account !== account) return;
-    const seconds = intervalDraft.seconds;
     await action(async () => {
-      await request({type: 'SET_SYNC_INTERVAL', intervalSeconds: seconds}, account);
-      const snapshot = state.current.db;
-      if (snapshot?.account === account) {
-        const updated = {...snapshot, syncIntervalSeconds: seconds};
-        state.current.db = updated;
-        if (state.current.mounted) setDb(updated);
-      }
-      setIntervalDraft(null);
-      notify('已保存请求间隔，下一轮采集生效。');
+      if (state.current.mounted) setPendingAction('account');
+      try {
+        await intervalWrite.current;
+        notify('正在切换账号并读取记录…', false, true);
+        await request({type: 'SELECT_ACCOUNT', account});
+        await load(account);
+        setIntervalDraft(null);
+        notify('已切换账号');
+      } finally {if (state.current.mounted) setPendingAction(null);}
     });
+  }
+  function saveInterval(seconds: number) {
+    const account = state.current.account;
+    if (!account) return;
+    if (state.current.mounted) setSavingInterval(true);
+    const saving: Promise<boolean> = Promise.resolve(intervalWrite.current).then(async () => {
+      try {
+        const before = state.current.db;
+        if (before?.account !== account || before.syncIntervalSeconds !== seconds) {
+          await request({type: 'SET_SYNC_INTERVAL', intervalSeconds: seconds}, account);
+          const snapshot = state.current.db;
+          if (snapshot?.account === account) {
+            const updated = {...snapshot, syncIntervalSeconds: seconds};
+            state.current.db = updated;
+            if (state.current.mounted) setDb(updated);
+          }
+        }
+        return true;
+      } catch (error) {
+        notify('保存请求间隔失败：' + errorText(error), true);
+        return false;
+      } finally {
+        if (intervalWrite.current === saving) {
+          intervalWrite.current = null;
+          if (state.current.mounted) {
+            setSavingInterval(false);
+            setIntervalDraft(draft => draft?.account === account && draft.seconds === seconds ? null : draft);
+          }
+        }
+      }
+    });
+    intervalWrite.current = saving;
   }
   async function exportData() {
     await action(async () => {
-      const response = await request({type: 'EXPORT'});
-      if (!response.data || typeof response.data !== 'object') throw new Error('导出失败：未收到有效数据。');
-      const url = URL.createObjectURL(new Blob([JSON.stringify(response.data, null, 2)], {type: 'application/json;charset=utf-8'}));
-      const anchor = document.createElement('a');
-      anchor.href = url; anchor.download = '求职记录-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json'; document.body.append(anchor);
-      try {anchor.click();} finally {anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 10000);}
-      notify('已发起 JSON 文件下载，请在浏览器下载列表中确认。');
+      if (state.current.mounted) setPendingAction('export');
+      try {
+        const response = await request({type: 'EXPORT'});
+        if (!response.data || typeof response.data !== 'object') throw new Error('导出失败：未收到有效数据');
+        const url = URL.createObjectURL(new Blob([JSON.stringify(response.data, null, 2)], {type: 'application/json;charset=utf-8'}));
+        const anchor = document.createElement('a');
+        anchor.href = url; anchor.download = 'BoDesk-备份-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json'; document.body.append(anchor);
+        try {anchor.click();} finally {anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 10000);}
+        notify('已开始导出 JSON，请在浏览器下载列表查看');
+      } finally {if (state.current.mounted) setPendingAction(null);}
+    });
+  }
+  async function importData(file: File) {
+    await action(async () => {
+      if (state.current.mounted) setPendingAction('import');
+      try {
+        const response = await request({type: 'IMPORT', json: await backupText(file)});
+        await load(response.account);
+        notify('已导入 ' + response.added + ' 条记录，跳过 ' + response.skipped + ' 条已有记录');
+      } finally {if (state.current.mounted) setPendingAction(null);}
     });
   }
   useEffect(() => {
     state.current.mounted = true;
-    const changeView = () => setShowBoard(isBoardView());
-    window.addEventListener('hashchange', changeView);
-    const account = new URLSearchParams(location.search).get('account');
-    void load(account || undefined).then(() => notify('')).catch(error => notify(errorText(error), true)).finally(() => markBusy(false));
-    const timer = setInterval(() => {
-      const current = state.current;
-      if (current.busy || current.stopping || current.syncRequested || !current.db?.sync.running || document.hidden) return;
-      void action(async () => {await load();});
-    }, 3000);
-    return () => {state.current.mounted = false; clearInterval(timer); window.removeEventListener('hashchange', changeView);};
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let loading = false;
+    let active = true;
+    const schedule = () => {
+      if (!active || timer !== undefined || loading || document.hidden) return;
+      timer = setTimeout(async () => {
+        timer = undefined;
+        const current = state.current;
+        if (document.hidden || !current.dirty) return;
+        if (current.busy || current.stopping) {schedule(); return;}
+        loading = true;
+        current.dirty = false;
+        const firstRead = !current.db;
+        try {await load(); if (firstRead) notify('');}
+        catch (error) {notify(errorText(error), true);}
+        finally {loading = false; if (current.dirty) schedule();}
+      }, 180);
+    };
+    const refresh = () => {state.current.dirty = true; schedule();};
+    const onDataChange = (message: ExternalRecord) => {if (message?.type === 'DASHBOARD_CHANGED') refresh();};
+    const slider = intervalInput.current;
+    const commitInterval = () => {if (slider && !slider.disabled) saveInterval(slider.valueAsNumber);};
+    slider?.addEventListener('change', commitInterval);
+    globalThis.chrome?.runtime?.onMessage?.addListener(onDataChange);
+    document.addEventListener('visibilitychange', refresh);
+    window.addEventListener('focus', refresh);
+    void load().then(() => notify('')).catch(error => notify(errorText(error), true)).finally(() => {markBusy(false); if (state.current.dirty) schedule();});
+    const progressTimer = setInterval(() => {if (state.current.db?.sync.running) refresh();}, 3000);
+    return () => {
+      active = false;
+      state.current.mounted = false;
+      clearTimeout(timer);
+      clearInterval(progressTimer);
+      slider?.removeEventListener('change', commitInterval);
+      globalThis.chrome?.runtime?.onMessage?.removeListener?.(onDataChange);
+      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('focus', refresh);
+    };
   }, []);
-  const title = showBoard ? 'JD 看板' : '采集与导出';
-  useEffect(() => {document.title = title;}, [title]);
+  const now = Date.now();
+  const activityWindow = boardActivityWindow(board.preferences, now);
   const current = db?.sync || {};
   const selectedInterval = intervalDraft && intervalDraft.account === db?.account ? intervalDraft.seconds : db?.syncIntervalSeconds ?? syncInterval.default;
-  const entries = Object.entries(current);
-  const {processed, total, failed} = current;
-  const progress = typeof processed === 'number' && Number.isFinite(processed) && processed >= 0
+  const intervalPosition = (selectedInterval - syncInterval.min) / (syncInterval.max - syncInterval.min) * 100 + '%';
+  const entries = Object.entries(current).filter(([key]) => key !== 'activityWindow' && key !== 'message');
+  const {processed, total} = current;
+  const progress = current.running && typeof processed === 'number' && Number.isFinite(processed) && processed >= 0
     && typeof total === 'number' && Number.isFinite(total) && total > 0
     ? {value: Math.min(processed, total), max: total} : null;
-  const syncState = current.running ? '采集中' : current.complete ? '本次采集已结束' : entries.length ? '当前未采集' : '暂无采集记录';
+  const collecting = syncRequested || Boolean(current.running);
 
   const accountPicker = <div className="account-picker">
     <label htmlFor="account-select">账号</label>
-    <select id="account-select" disabled={busy || stopping || syncRequested || !db?.accounts.length} value={db?.account || ''} onChange={event => void selectAccount(event.target.value)}>
-      {!db?.account && <option value="">{db ? '暂无可用账号' : '正在读取账号…'}</option>}
-      {db?.accounts.map(account => <option key={account} value={account}>{account}</option>)}
-    </select>
+    <DashboardSelect id="account-select" label="账号" disabled={busy || stopping || syncRequested} value={db?.account || ''}
+      placeholder={db ? '暂无可用账号' : '正在读取账号…'} onChange={account => void selectAccount(account)}
+      options={db?.accounts.map((account, index) => {
+        const name = db.accountNames[account];
+        const duplicate = name && db.accounts.some(other => other !== account && db.accountNames[other] === name);
+        return {value: account, label: name ? name + (duplicate ? '（账号 ' + (index + 1) + '）' : '') : '未识别名称的账号 ' + (index + 1)};
+      }) ?? []} />
   </div>;
 
-  return <main className={showBoard ? 'shell board-shell' : 'shell'}>
-    <nav className="dashboard-views" aria-label="记录视图">
-      <a href="#collection" aria-current={showBoard ? undefined : 'page'}>采集与导出</a>
-      <a href="#board" aria-current={showBoard ? 'page' : undefined}>JD 看板</a>
-    </nav>
+  return <main className="shell">
     <header className="page-header">
-      <h1 id="dashboard-title">{title}</h1>
+      <h1 id="dashboard-title">JD 看板</h1>
       <div className="page-actions">
-        {showBoard && accountPicker}
-        <button id="refresh" className="button" type="button" disabled={busy || stopping} onClick={() => void action(async () => {await load(); notify('已刷新本地数据。');})}>刷新记录</button>
+        {accountPicker}
+        <div className="file-actions">
+          <input ref={importInput} type="file" id="import-file" accept=".json,application/json" hidden onChange={event => {
+            const file = event.target.files?.[0];
+            event.target.value = '';
+            if (file) void importData(file);
+          }} />
+          <button id="import" className="button" type="button" aria-busy={pendingAction === 'import'} disabled={busy || stopping} onClick={() => importInput.current?.click()}>
+            {pendingAction === 'import' ? <><span className="bh-spinner"><Icon icon={Loader} /></span>导入中…</> : '导入 JSON'}
+          </button>
+          <button id="export" className="button" type="button" aria-busy={pendingAction === 'export'} disabled={busy || stopping || !db?.account} onClick={() => void exportData()}>
+            {pendingAction === 'export' ? <><span className="bh-spinner"><Icon icon={Loader} /></span>导出中…</> : '导出 JSON'}
+          </button>
+        </div>
       </div>
     </header>
-    <p id="feedback" className={'feedback' + (feedback.error ? ' error' : '')} role={feedback.error ? 'alert' : 'status'} aria-live="polite" aria-atomic="true">{feedback.message}</p>
-    {showBoard ? <JobBoard key={db?.account} snapshot={db} busy={busy} onSave={saveBoardEdit} /> : <div className="workspace">
-      <section className="account-panel" aria-labelledby="records-title" aria-busy={busy}>
-        <h2 id="records-title">本地记录</h2>
-        {accountPicker}
-        <dl className="local-count"><dt>已记录对话</dt><dd id="conversation-count">{db ? db.conversations.length : '—'}</dd></dl>
-        <button id="export" className="button export" type="button" disabled={busy || stopping || !db} onClick={() => void exportData()}>导出 JSON</button>
-      </section>
-
-      <section className="coverage" aria-labelledby="coverage-title" aria-busy={busy} id="sync-panel">
-        <div className="section-heading">
-          <h2 id="coverage-title">采集进度</h2>
-          <span id="sync-state" className="sync-state" data-running={!!current.running}>{syncState}</span>
+    <p id="feedback" className={'feedback' + (feedback.error ? ' error' : '')} data-pending={feedback.pending || undefined} role={feedback.error ? 'alert' : 'status'} aria-live="polite" aria-atomic="true">
+      {feedback.pending && feedback.message && <span className="bh-spinner"><Icon icon={Loader} /></span>}
+      {feedback.message}
+    </p>
+    <section className="coverage" aria-label="采集" id="sync-panel">
+      <div className="sync-toolbar">
+        <ActivityRange start={board.preferences.range} end={board.preferences.rangeEnd} now={now} onChange={board.updateRange} />
+        <div className="sync-actions">
+          <button id="sync" className="button primary" type="button" aria-busy={collecting} disabled={busy || stopping || !db?.account || collecting} onClick={() => void sync()}>
+            {collecting ? <><span className="bh-spinner"><Icon icon={Loader} /></span>采集中</> : activityWindow ? '采集所选范围' : '采集全部已加载会话'}
+          </button>
+          {(collecting || stopping) && <button id="stop-sync" className="button" type="button" aria-busy={stopping} disabled={stopping || !(syncRequested || (!busy && current.running))} onClick={() => void stop()}>
+            {stopping ? <><span className="bh-spinner"><Icon icon={Loader} /></span>正在停止…</> : '停止采集'}
+          </button>}
+          <button className="sync-details-toggle" type="button" aria-label="采集设置与详情" title="采集设置与详情" aria-expanded={detailsOpen} aria-controls="sync-details"
+            onClick={() => setDetailsOpen(open => !open)}><Icon icon={Gear} /></button>
         </div>
-        <div id="sync-progress" className="progress-report">
-          <dl className="progress-counts">
-            <div><dt>本次已处理</dt><dd>{text(processed, '—')}{total != null && <span> / {total}</span>}</dd></div>
-            <div><dt>失败</dt><dd className={failed && failed > 0 ? 'failed' : undefined}>{text(failed, '—')}</dd></div>
+      </div>
+      <div id="sync-details" hidden={!detailsOpen}>
+        <div className="sync-details-inner">
+          <dl id="sync-metadata" className="metadata">
+            <div className="sync-field">
+              <dt><label htmlFor="sync-interval">采集请求间隔</label></dt>
+              <dd className="interval-setting" data-pending={savingInterval || undefined}>
+                <output htmlFor="sync-interval">{selectedInterval} 秒</output>
+                <div className="board-range-control interval-range" style={{'--range-end': '0%', '--range-start': intervalPosition} as CSSProperties}>
+                  <input ref={intervalInput} id="sync-interval" type="range" min={syncInterval.min} max={syncInterval.max} step={1} value={selectedInterval}
+                    aria-valuetext={selectedInterval + ' 秒'} aria-describedby="interval-scope"
+                    disabled={busy || stopping || !db?.account} onChange={event => {if (db?.account) setIntervalDraft({account: db.account, seconds: event.target.valueAsNumber});}} />
+                  <div className="board-range-rail" aria-hidden="true">
+                    <span className="board-range-selection" />
+                    <span className="board-range-thumb board-range-thumb-start" />
+                  </div>
+                </div>
+                <span id="interval-scope" hidden>自动保存到当前账号，下次采集生效</span>
+              </dd>
+            </div>
+            {current.message && <div className="sync-field"><dt>采集结果</dt><dd className="coverage-note" role="status">{describe(current.message)}</dd></div>}
+            <div className="sync-field" id="conversation-count"><dt>已记录对话</dt><dd>{db?.conversations.length ?? '—'}</dd></div>
+            {progress && <div className="sync-field"><dt>采集进度</dt><dd className="sync-progress"><progress aria-label="本次会话处理进度" {...progress} /><span>{progress.value} / {progress.max}</span></dd></div>}
+            {entries.length ? entries.map(([key, value]) => <div className="sync-field" key={key}><dt>{names[key] || key}</dt><dd>{/At$/.test(key) ? formatTime(value) : describe(value)}</dd></div>)
+              : <div className="sync-field"><dt>覆盖情况</dt><dd>暂无采集详情</dd></div>}
           </dl>
-          {progress && <progress aria-label="本次会话处理进度" {...progress} />}
-          {current.updatedAt != null && <p>更新时间 {formatTime(current.updatedAt)}</p>}
         </div>
-        {current.message && <p className="coverage-note">{describe(current.message)}</p>}
-        <div className="interval-setting">
-          <div className="interval-heading">
-            <label htmlFor="sync-interval">采集请求间隔</label>
-            <output htmlFor="sync-interval">{selectedInterval} 秒</output>
-          </div>
-          <input id="sync-interval" type="range" min={syncInterval.min} max={syncInterval.max} step={1} value={selectedInterval}
-            aria-valuetext={selectedInterval + ' 秒'} aria-describedby="interval-scope"
-            disabled={busy || stopping || !db?.account} onChange={event => {if (db?.account) setIntervalDraft({account: db.account, seconds: event.target.valueAsNumber});}} />
-          <div className="interval-limits" aria-hidden="true"><span>{syncInterval.min} 秒</span><span>{syncInterval.max} 秒</span></div>
-          <div className="interval-footer">
-            <span id="interval-scope" hidden>按账号保存，下次采集生效。</span>
-            <button className="button" id="save-sync-interval" type="button" disabled={busy || stopping || !db?.account || selectedInterval === db.syncIntervalSeconds} onClick={() => void saveInterval()}>保存间隔</button>
-          </div>
-        </div>
-        <div className="actions">
-          <button id="sync" className="button primary" type="button" disabled={busy || stopping || !db || current.running} onClick={() => void sync()}>{syncRequested ? '正在请求采集…' : '更新采集'}</button>
-          <button id="stop-sync" className="button" type="button" disabled={stopping || !(syncRequested || (!busy && current.running))} onClick={() => void stop()}>{stopping ? '正在停止…' : '停止采集'}</button>
-        </div>
-        <details id="sync-details">
-          <summary>查看采集详情</summary>
-          <dl id="sync-metadata" className="metadata">{entries.length ? entries.map(([key, value]) => <Fragment key={key}><dt>{names[key] || key}</dt><dd>{/At$/.test(key) ? formatTime(value) : describe(value)}</dd></Fragment>) : <><dt>覆盖情况</dt><dd>暂无采集详情。</dd></>}</dl>
-        </details>
-      </section>
-    </div>}
+      </div>
+    </section>
+    <JobBoard key={db?.account} snapshot={db} busy={busy} onSave={saveBoardEdit} activityWindow={activityWindow} now={now} board={board} />
   </main>;
 }
 

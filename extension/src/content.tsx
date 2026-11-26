@@ -1,7 +1,7 @@
 import {useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore} from 'react';
 import {createRoot} from 'react-dom/client';
-import {ArrowUpRight, ChevronDown, More, Star, Trash} from 'reicon';
-import {Icon} from './icon.tsx';
+import {ArrowUpRight, ChevronDown, Loader, More, Trash} from 'reicon';
+import {FavoriteMark, Icon} from './icon.tsx';
 import {MessageReceipt} from './message-receipt.tsx';
 import {NoteIcon, showEditorDialog, statusOptionLabel, StatusOptions} from './record-editing.tsx';
 import type {ExternalRecord, HumanMessagePreview, WidgetContext, WidgetData, WidgetJob} from './types.ts';
@@ -24,8 +24,9 @@ interface View {
   editor: string | null;
   session: number;
   notice: string;
+  loading: boolean;
 }
-let view: View = {context: null, data: null, editor: null, session: 0, notice: ''};
+let view: View = {context: null, data: null, editor: null, session: 0, notice: '', loading: false};
 const listeners = new Set<() => void>();
 const drafts = new Map<string, Draft>();
 const pending = new Map<string, {timer: ReturnType<typeof setTimeout>; resolve: (value: unknown) => void}>();
@@ -72,10 +73,11 @@ async function refreshWidget() {
   try {
     const response = await chrome.runtime.sendMessage({type: 'WIDGET_GET', ...context});
     if (version !== renderVersion || context !== view.context || view.editor) return;
-    if (!response?.ok) {showNotice(response?.error || '本地职位状态读取失败'); return;}
+    if (!response?.ok) {update({loading: false, notice: response?.error || '本地职位状态读取失败'}); return;}
     const data: WidgetData = response.data || {};
-    if (JSON.stringify(data) !== JSON.stringify(view.data)) update({data, notice: data.companyDeleted ? '该公司的本地记录已删除' : data.jobs?.length ? '' : '暂无已记录的 JD'});
-  } catch {if (version === renderVersion) showNotice('扩展连接中断，请刷新页面');}
+    const nextNotice = data.companyDeleted ? '该公司的本地记录已删除' : data.jobs?.length ? '' : '暂无已记录的 JD';
+    if (JSON.stringify(data) !== JSON.stringify(view.data) || view.loading || view.notice !== nextNotice) update({data, loading: false, notice: nextNotice});
+  } catch {if (version === renderVersion) update({loading: false, notice: '扩展连接中断，请刷新页面'});}
 }
 
 function NoteEditor({kind, id, title}: {kind: NoteKind; id: string; title?: string}) {
@@ -107,7 +109,7 @@ function NoteEditor({kind, id, title}: {kind: NoteKind; id: string; title?: stri
       else message = {
         type: 'SAVE_JOB', account: context.account, jobId: id,
         note: value, expectedNote: baseValue,
-        context: {companyId: data.companyId, companyName: data.companyName, title, ...(context.preview ? {preview: true} : {})},
+        context: {companyId: data.companyId, companyName: data.companyName, title, ...(context.preview ? {preview: true} : {}), ...(typeof context.jobClosed === 'boolean' ? {jobClosed: context.jobClosed} : {})},
       };
     }
     try {
@@ -131,7 +133,7 @@ function NoteEditor({kind, id, title}: {kind: NoteKind; id: string; title?: stri
         setValue(draft.value);
       }} />
       <p className="bh-editor-feedback" role="status" hidden={!feedback}>{feedback}</p>
-      <div className="bh-editor-actions"><button className="bh-cancel" type="button" disabled={saving} onClick={() => close(true)}>取消</button><button className="bh-save" type="submit" disabled={saving}>保存备注</button></div>
+      <div className="bh-editor-actions"><button className="bh-cancel" type="button" disabled={saving} onClick={() => close(true)}>取消</button><button className="bh-save" type="submit" aria-busy={saving} disabled={saving}>{saving ? <><span className="bh-spinner"><Icon icon={Loader} /></span>正在保存…</> : '保存备注'}</button></div>
     </form>
   </div>;
 }
@@ -195,7 +197,7 @@ function StatusPicker({id, job, editor, previousStatus, dismiss}: {id: string; j
     try {
       const result = await chrome.runtime.sendMessage({type: 'SAVE_JOB', account: context.account, jobId: job.id,
         status: selection, expectedManualStatus: manualStatus,
-        context: {companyId: data.companyId, companyName: data.companyName, title: job.title, ...(context.preview ? {preview: true} : {})},
+        context: {companyId: data.companyId, companyName: data.companyName, title: job.title, ...(context.preview ? {preview: true} : {}), ...(typeof context.jobClosed === 'boolean' ? {jobClosed: context.jobClosed} : {})},
       });
       if (!result?.ok) throw new Error(result?.error || '本地保存失败');
       if (view.context === context && view.editor === editor && view.session === session) {
@@ -223,7 +225,7 @@ function StatusPicker({id, job, editor, previousStatus, dismiss}: {id: string; j
       {error && <p className="bh-status-error" role="alert">{error}</p>}
       <div className="bh-editor-actions">
         <button className="bh-cancel" type="button" autoFocus disabled={saving} onClick={cancel}>取消</button>
-        <button className="bh-save" type="button" disabled={saving} onClick={() => void confirm()}>{saving ? '正在保存…' : '确认修改'}</button>
+        <button className="bh-save" type="button" aria-busy={saving} disabled={saving} onClick={() => void confirm()}>{saving ? <><span className="bh-spinner"><Icon icon={Loader} /></span>正在保存…</> : '确认修改'}</button>
       </div>
     </dialog>}
   </>;
@@ -235,7 +237,7 @@ function LatestMessage({text, direction, receipt}: HumanMessagePreview) {
   const message = useRef<HTMLSpanElement>(null);
   const messageId = useId();
   const expanded = expandedText === text;
-  const sender = direction === 'out' ? '我' : direction === 'in' ? 'Boss' : '未知';
+  const sender = direction === 'out' ? '我' : direction === 'in' ? '对方' : '未知';
 
   useLayoutEffect(() => {
     const element = message.current;
@@ -253,8 +255,8 @@ function LatestMessage({text, direction, receipt}: HumanMessagePreview) {
     return () => observer.disconnect();
   }, [text]);
 
-  return <div className={'bh-message-preview bh-message-' + direction} role="group" aria-label="最新人工消息">
-    <span className="bh-message-sender" title={direction === 'unknown' ? '发送方未知' : undefined}>{sender}</span>
+  return <div className={'bh-message-preview bh-message-' + direction} role="group" aria-label="最近一条对话">
+    <span className="bh-message-sender" title={direction === 'unknown' ? '发送方向未知' : undefined}>{sender}</span>
     <div id={messageId} className="bh-message-body" data-expanded={expanded}>
       <span className="bh-message-text" ref={message}>{text}</span>
     </div>
@@ -295,7 +297,7 @@ function DeleteLayer({name, company, editor, message, draftKeys}: {name: string;
     {error && <p className="bh-status-error" role="alert">{error}</p>}
     <div className="bh-editor-actions">
       <button className="bh-cancel" type="button" autoFocus disabled={saving} onClick={close}>取消</button>
-      <button className="bh-confirm-delete" type="button" disabled={saving} onClick={() => void confirm()}>{saving ? '正在删除…' : '确认删除'}</button>
+      <button className="bh-confirm-delete" type="button" aria-busy={saving} disabled={saving} onClick={() => void confirm()}>{saving ? <><span className="bh-spinner"><Icon icon={Loader} /></span>正在删除…</> : '确认删除'}</button>
     </div>
   </dialog>;
 }
@@ -318,9 +320,16 @@ function Job({job, context}: {job: WidgetJob; context: WidgetContext}) {
   }
   return <article className={'bh-job' + (job.current ? ' bh-current' : '')} aria-current={job.current ? 'true' : undefined}>
     <div className="bh-job-heading-row">
-      <h3 className="bh-job-heading">{url ? <a className="bh-job-title" href={url} target="_blank" rel="noopener noreferrer">{job.title || '待识别 JD'}</a> : <span className="bh-job-title">{job.title || '待识别 JD'}</span>}</h3>
-      {job.favorite && <span className="bh-favorite" role="img" aria-label="已收藏" title="已收藏"><Icon icon={Star} /></span>}
+      <h3 className="bh-job-heading" title={job.title || '待识别 JD'}>{url ? <a className="bh-job-title" href={url} target="_blank" rel="noopener noreferrer">{job.title || '待识别 JD'}</a> : <span className="bh-job-title">{job.title || '待识别 JD'}</span>}</h3>
+      {job.favorite && <FavoriteMark kind="job" />}
+      <div className="bh-heading-actions">
+        <button className="bh-icon-button bh-job-note-edit" type="button" disabled={!job.id} aria-label={noteLabel + '：' + (job.title || '待识别 JD')} title={noteLabel} data-active={view.editor === noteKey} onClick={openNote}><NoteIcon hasNote={!!job.note} /></button>
+        <button className="bh-icon-button bh-job-delete" type="button" disabled={!job.id || !job.persisted} aria-label={'删除 ' + (job.title || '未命名职位')} title="删除职位记录" aria-haspopup="dialog" onClick={remove}>
+          <Icon icon={Trash} />
+        </button>
+      </div>
     </div>
+    {job.jobClosed && <span className="bh-job-closed">职位已关闭</span>}
     {job.note && <p className="bh-note-text">{job.note}</p>}
     <div className="bh-job-status-row">
       <button className="bh-job-status" type="button" disabled={!canEditStatus} aria-haspopup={canEditStatus ? 'dialog' : undefined}
@@ -328,12 +337,6 @@ function Job({job, context}: {job: WidgetJob; context: WidgetContext}) {
         aria-expanded={canEditStatus ? statusOpen : undefined} aria-controls={statusOpen ? statusPickerId : undefined}
         onClick={() => {if (statusOpen) void closeEditor(); else activateEditor(statusKey);}}
         onKeyDown={event => {if (statusOpen && event.key === 'Escape') {event.stopPropagation(); void closeEditor();}}}>{statusText}{canEditStatus && <Icon icon={ChevronDown} />}</button>
-      <div className="bh-heading-actions">
-        <button className="bh-icon-button bh-job-note-edit" type="button" disabled={!job.id} aria-label={noteLabel + '：' + (job.title || '待识别 JD')} title={noteLabel} data-active={view.editor === noteKey} onClick={openNote}><NoteIcon hasNote={!!job.note} /></button>
-        <button className="bh-icon-button bh-job-delete" type="button" disabled={!job.id || !job.persisted} aria-label={'删除 ' + (job.title || '未命名职位')} title="删除职位记录" aria-haspopup="dialog" onClick={remove}>
-          <Icon icon={Trash} />
-        </button>
-      </div>
     </div>
     {statusOpen && <StatusPicker key={view.session} id={statusPickerId} job={job} editor={statusKey} previousStatus={status} dismiss={closeEditor} />}
     {job.latestMessage && <LatestMessage {...job.latestMessage} />}
@@ -346,13 +349,14 @@ function Job({job, context}: {job: WidgetJob; context: WidgetContext}) {
 function Widget() {
   const current = useSyncExternalStore(subscribe, getSnapshot);
   const [collapsed, setCollapsed] = useState(() => window.matchMedia?.('(max-width: 650px)').matches ?? false);
+  const [openingDashboard, setOpeningDashboard] = useState(false);
   const records = useRef<HTMLDivElement>(null);
   const lastPositionedContext = useRef<WidgetContext | null>(null);
-  const {context, data, editor, session, notice} = current;
+  const {context, data, editor, session, notice, loading} = current;
   const companyId = data?.companyId || '';
   const key = editorKey('company-note', companyId);
   const deleteKey = editorKey('company-delete', companyId);
-  const companyName = data?.companyName || context?.companyName || (context ? '公司待识别' : '求职记录');
+  const companyName = data?.companyName || context?.companyName || (context ? '公司待识别' : 'BoDesk');
   const companyNoteLabel = data?.companyNote ? '编辑公司备注' : '添加公司备注';
   useLayoutEffect(() => {
     if (!context || collapsed || lastPositionedContext.current === context) return;
@@ -371,36 +375,48 @@ function Widget() {
     }
     setCollapsed(!collapsed);
   }
-  async function openDashboard(view: 'board' | 'collection') {
+  async function openDashboard() {
+    if (openingDashboard) return;
+    setOpeningDashboard(true);
     try {
-      const result = await chrome.runtime.sendMessage({type: 'OPEN_DASHBOARD', account: context?.account || lastAccount, view});
-      if (!result?.ok) showNotice(result?.error || (view === 'board' ? '打开 JD 看板失败' : '打开采集页面失败'));
-    } catch {showNotice('扩展已更新，请刷新页面');}
+      const result = await chrome.runtime.sendMessage({type: 'OPEN_DASHBOARD', account: context?.account || lastAccount});
+      if (!result?.ok) showNotice(result?.error || '打开 JD 看板失败');
+    } catch {showNotice('扩展连接中断，请刷新页面');}
+    finally {setOpeningDashboard(false);}
   }
   return <>
     <div className="bh-widget-header">
       <div className="bh-widget-drag" ref={attachWidgetDragHandle} role="group" tabIndex={0} aria-label="拖动浮窗，或用方向键移动" aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight" title="拖动浮窗"><Icon icon={More} /></div>
-      <h2 className="bh-company" hidden={collapsed}>{companyName}</h2>
+      <h2 className="bh-company" hidden={collapsed}>{companyName}{data?.companyFavorite && <FavoriteMark kind="company" />}</h2>
       {context && !data?.companyDeleted && <div className="bh-heading-actions" hidden={collapsed}>
         <button className="bh-icon-button bh-company-note-edit" type="button" disabled={!companyId} aria-label={companyNoteLabel} title={companyNoteLabel} aria-haspopup="dialog" data-active={editor === key} onClick={() => openNoteEditor('company-note', companyId, data?.companyNote || '')}><NoteIcon hasNote={!!data?.companyNote} /></button>
         {data?.companyPersisted && <button className="bh-icon-button bh-company-delete" type="button" aria-label={'删除公司 ' + companyName} title="删除公司记录" aria-haspopup="dialog" onClick={() => {if (editor) showNotice('请先保存或取消正在编辑的内容'); else activateEditor(deleteKey);}}><Icon icon={Trash} /></button>}
       </div>}
-      <button className="bh-icon-button bh-widget-toggle" type="button" aria-label={collapsed ? '展开浮窗' : '收起浮窗'} aria-expanded={!collapsed} aria-controls="boss-local-helper-widget-body" onClick={toggleWidget}><Icon icon={ChevronDown} /></button>
+      <button className="bh-icon-button bh-widget-toggle" type="button" aria-label={collapsed ? '展开浮窗' : '收起浮窗'} aria-expanded={!collapsed} aria-controls="boss-local-helper-widget-body" onClick={toggleWidget}>{collapsed && <span>BoDesk</span>}<Icon icon={ChevronDown} /></button>
     </div>
     <div id="boss-local-helper-widget-body" className="bh-widget-body" hidden={collapsed}>
       {context && !!data?.companyNote && <div className="bh-company-notes" role="group" aria-label="公司备注"><p className="bh-note-text">{data.companyNote}</p></div>}
       {editor === key && <NoteEditor key={key + ':' + session} kind="company-note" id={companyId} title={companyName} />}
       {context && editor === deleteKey && <DeleteLayer name={companyName} company editor={deleteKey} message={{type: 'DELETE_COMPANY', account: context.account, companyId, expectedNote: data?.companyNote || ''}} draftKeys={[key, ...(data?.jobs || []).map(job => editorKey('job-note', job.id))]} />}
       <div ref={records} className="bh-records">
-        {!context && <p className="bh-empty">打开一段对话或一个职位，查看沟通记录。</p>}
-        {context && !!data?.jobs?.length && <section className="bh-jobs" aria-label="职位记录">
+        {!context && <p className="bh-empty">打开一段对话或职位页，即可查看沟通记录</p>}
+        {context && loading && !data && <div className="bh-skeleton-list bh-skeleton-card" aria-hidden="true">
+          <span className="bh-skeleton-bar" style={{width: '72%'}} />
+          <span className="bh-skeleton-bar" style={{width: '48%'}} />
+          <span className="bh-skeleton-bar" style={{width: '88%'}} />
+        </div>}
+        {context && !!data?.jobs?.length && <section className="bh-jobs" key={context.account + ':' + (data.companyId || data.companyName || '')} aria-label="职位记录">
           {data.jobs.map(job => <Job key={context.account + ':' + job.id} job={job} context={context} />)}
         </section>}
-        <p className="bh-notice" role="status" hidden={!notice}>{notice}</p>
+        <p className="bh-notice" role="status" hidden={!notice} data-loading={loading || undefined}>
+          {loading && notice && <span className="bh-spinner"><Icon icon={Loader} /></span>}
+          {notice}
+        </p>
       </div>
       <div className="bh-controls">
-        <button className="bh-overview" type="button" onClick={() => void openDashboard('board')}>JD 看板<Icon icon={ArrowUpRight} /></button>
-        <button className="bh-overview" type="button" onClick={() => void openDashboard('collection')}>采集与导出<Icon icon={ArrowUpRight} /></button>
+        <button className="bh-overview" type="button" aria-busy={openingDashboard} disabled={openingDashboard} onClick={() => void openDashboard()}>
+          JD 看板{openingDashboard ? <span className="bh-spinner"><Icon icon={Loader} /></span> : <Icon icon={ArrowUpRight} />}
+        </button>
       </div>
     </div>
   </>;
@@ -418,7 +434,7 @@ function ensureWidget() {
 
 function chooseContext(data: ExternalRecord) {
   let next: WidgetContext | null = null;
-  if (data.type === 'PAGE_CONTEXT') next = {account: data.account, jobId: data.jobId || '', companyName: data.companyName || '', title: data.title || '', preview: true};
+  if (data.type === 'PAGE_CONTEXT') next = {account: data.account, jobId: data.jobId || '', companyName: data.companyName || '', title: data.title || '', preview: true, ...(typeof data.jobClosed === 'boolean' ? {jobClosed: data.jobClosed} : {})};
   if (data.type === 'SNAPSHOT') {
     const row = (data.rows || []).find((item: ExternalRecord) => item.id === data.selectedId);
     if (row) next = {account: data.account, jobId: row.jobId || '', companyName: row.companyName || '', title: row.jobTitle || ''};
@@ -426,7 +442,7 @@ function chooseContext(data: ExternalRecord) {
   if (!['PAGE_CONTEXT', 'SNAPSHOT'].includes(data.type) || JSON.stringify(next) === JSON.stringify(view.context)) return;
   renderVersion++;
   editorTrigger = null;
-  update({context: next, data: null, editor: null, session: view.session + 1, notice: next ? '正在读取职位状态…' : ''});
+  update({context: next, data: null, editor: null, session: view.session + 1, loading: Boolean(next), notice: next ? '正在读取职位状态…' : ''});
   if (document.body) ensureWidget();
 }
 
@@ -435,7 +451,7 @@ window.addEventListener('message', async event => {
   const data = event.data.data;
   if (!data || typeof data !== 'object') return;
   if (data.type === 'COMMAND_RESULT') {const command = pending.get(data.commandId); if (command) {clearTimeout(command.timer); pending.delete(data.commandId); command.resolve(data);} return;}
-  if (!['SNAPSHOT', 'CONVERSATION', 'SYNC_PROGRESS', 'SYNC_ERROR', 'PAGE_CONTEXT', 'FAVORITES'].includes(data.type)) return;
+  if (!['SNAPSHOT', 'CONVERSATION', 'SYNC_PROGRESS', 'SYNC_ERROR', 'PAGE_CONTEXT', 'FAVORITES', 'COMPANY_FAVORITES'].includes(data.type)) return;
   if (typeof data.account === 'string') lastAccount = data.account;
   chooseContext(data);
   try {
@@ -444,13 +460,17 @@ window.addEventListener('message', async event => {
     if (!document.body) return;
     ensureWidget();
     if (!result?.ok) {showNotice(result?.error || '本地数据库更新失败'); return;}
-    if (view.context?.account === data.account && ['SNAPSHOT', 'CONVERSATION', 'PAGE_CONTEXT', 'FAVORITES'].includes(data.type)) await refreshWidget();
+    if (view.context?.account === data.account && ['SNAPSHOT', 'CONVERSATION', 'PAGE_CONTEXT', 'FAVORITES', 'COMPANY_FAVORITES'].includes(data.type)) await refreshWidget();
   } catch {
     if (data.requestId) post({type: 'INGEST_ACK', requestId: data.requestId, account: data.account, runId: data.runId, ok: false, error: '扩展连接中断，请刷新页面'});
     showNotice('扩展连接中断，请刷新页面');
   }
 });
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === 'FAVORITES_CHANGED') {
+    if (view.context?.account === message.account) void refreshWidget();
+    return;
+  }
   if (message.type === 'BUILD_RELOAD_READY') {
     sendResponse({ready: !view.editor && ![...drafts.values()].some(draft => draft.value !== draft.baseValue)});
     return;
@@ -460,7 +480,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const commandId = crypto.randomUUID();
   const timer = setTimeout(() => {pending.delete(commandId); sendResponse({ok: false, error: '网页未响应，请确认聊天页已加载并刷新'});}, 12000);
   pending.set(commandId, {timer, resolve: sendResponse});
-  post({type: message.type, commandId, account: message.account, runId: message.runId, ...(message.type === 'SYNC' ? {intervalSeconds: message.intervalSeconds} : {})});
+  post({type: message.type, commandId, account: message.account, runId: message.runId, ...(message.type === 'SYNC' ? {intervalSeconds: message.intervalSeconds, activityWindow: message.activityWindow} : {})});
   return true;
 });
 document.addEventListener('visibilitychange', () => {if (!document.hidden && view.context && !view.editor) void refreshWidget();});

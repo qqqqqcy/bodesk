@@ -1,5 +1,7 @@
 import {useId, useState} from 'react';
 import type {SubmitEvent} from 'react';
+import {Loader} from 'reicon';
+import {Icon} from './icon.tsx';
 import {showEditorDialog, statusOptionLabel, StatusOptions} from './record-editing.tsx';
 import type {ExternalRecord} from './types.ts';
 
@@ -51,32 +53,32 @@ export function BoardEditor({target, account, onSave, onClose}: {
       : {type: 'SAVE_JOB', jobId: target.id, ...fields});
   }
 
-  const title = target.kind === 'status' ? (selection ? '确认修改职位状态' : '选择职位状态')
+  const title = target.kind === 'status' ? (selection ? '确认修改职位状态' : '修改状态')
     : target.kind === 'company-note' ? '公司备注' : 'JD 备注';
 
   return <dialog className="board-edit-dialog" ref={showEditorDialog} aria-labelledby={heading}
     onCancel={event => {event.preventDefault(); cancel();}}>
     <h2 id={heading}>{selection ? title : target.name + ' · ' + title}</h2>
-    {target.kind === 'status' ? (selection ? <>
+    {target.kind === 'status' ? (selection ? <div key="confirm" className="board-edit-step">
       <p>将「{target.name}」的状态从「{target.status}」改为「{statusOptionLabel(selection)}」？</p>
       {error && <p className="board-edit-error" role="alert">{error}</p>}
       <div className="board-edit-actions">
         <button className="button" type="button" autoFocus disabled={saving} onClick={cancel}>取消</button>
-        <button className="button primary" type="button" disabled={saving}
+        <button className="button primary" type="button" aria-busy={saving} disabled={saving}
           onClick={() => void save({type: 'SAVE_JOB', jobId: target.id, status: selection, expectedManualStatus: target.manualStatus})}>
-          {saving ? '正在保存…' : '确认修改'}
+          {saving ? <><span className="bh-spinner"><Icon icon={Loader} /></span>正在保存…</> : '确认修改'}
         </button>
       </div>
-    </> : <>
+    </div> : <div key="pick" className="board-edit-step">
       <StatusOptions current={target.manualStatus ?? 'auto'} onSelect={setSelection} />
       <div className="board-edit-actions"><button className="button" type="button" onClick={onClose}>关闭</button></div>
-    </>) : <form onSubmit={saveNote}>
+    </div>) : <form onSubmit={saveNote}>
       <textarea aria-labelledby={heading} rows={5} maxLength={10000} autoFocus disabled={saving}
         value={note} onChange={event => setNote(event.target.value)} />
       {error && <p className="board-edit-error" role="alert">{error}</p>}
       <div className="board-edit-actions">
         <button className="button" type="button" disabled={saving} onClick={onClose}>取消</button>
-        <button className="button primary" type="submit" disabled={saving}>{saving ? '正在保存…' : '保存备注'}</button>
+        <button className="button primary" type="submit" aria-busy={saving} disabled={saving}>{saving ? <><span className="bh-spinner"><Icon icon={Loader} /></span>正在保存…</> : '保存备注'}</button>
       </div>
     </form>}
   </dialog>;

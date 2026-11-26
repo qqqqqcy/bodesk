@@ -22,6 +22,7 @@ function rebuild() {
 rebuild();
 const watchers = [
   watch(new URL('../extension/src/', import.meta.url), {recursive: true}, rebuild),
+  watch(new URL('../extension/assets/', import.meta.url), {recursive: true}, rebuild),
   watch(new URL('../extension/', import.meta.url), (_event, file) => {if (file && extensionStaticFiles.includes(file)) rebuild();}),
 ];
 let vite: Awaited<ReturnType<typeof createServer>>;

@@ -33,11 +33,14 @@ export interface ConversationRecord {
 }
 
 export interface JobRecord extends ExternalRecord {
+  jobClosed?: boolean;
+  jobClosedObservedAt?: number;
   autoContributions?: Record<string, Contributions>;
   manualStatus?: string | null;
   statusAt?: number;
   statusActivityAt?: number;
   latestMessage?: TimedHumanMessagePreview;
+  messageActivity?: number[];
   conversationIds?: string[];
 }
 
@@ -47,6 +50,7 @@ export interface WidgetContext {
   companyName: string;
   title: string;
   preview?: boolean;
+  jobClosed?: boolean;
 }
 
 export interface HumanMessagePreview {
@@ -69,6 +73,7 @@ export interface WidgetJob {
   manual?: boolean;
   current?: boolean;
   favorite?: boolean;
+  jobClosed?: boolean;
   persisted?: boolean;
   updatedAt?: number;
   latestMessage?: HumanMessagePreview;
@@ -81,6 +86,7 @@ export interface WidgetData {
   companyName?: string;
   companyNote?: string;
   companyPersisted?: boolean;
+  companyFavorite?: boolean;
   companyDeleted?: boolean;
   jobs?: WidgetJob[];
 }
@@ -100,6 +106,7 @@ export interface SyncState {
 export interface DatabaseSnapshot {
   account: string | null;
   accounts: string[];
+  accountNames: Record<string, string>;
   conversations: unknown[];
   jobs: JobRecord[];
   companies: ExternalRecord[];
@@ -110,7 +117,7 @@ export interface DatabaseSnapshot {
 declare global {
   interface Window {
     __bossLocalHelper?: boolean;
-    _PAGE?: {uid: string | number};
+    _PAGE?: {uid: string | number; name?: string};
   }
   interface Element {
     __vue__?: ExternalRecord;

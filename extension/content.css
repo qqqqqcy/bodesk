@@ -8,12 +8,19 @@
   --bh-accent: #365d80;
   --bh-accent-hover: #294964;
   --bh-active: #eeeeee;
-  --bh-danger: #181818;
+  --bh-danger: #b42318;
+  --bh-danger-hover: #912018;
+  --bh-incoming-message: #a83226;
   --bh-gutter: 16px;
   --bh-gap: 8px;
   --bh-control-height: 32px;
   --bh-control-radius: 8px;
   --bh-control-size: 14px;
+  --bh-ease: cubic-bezier(.2, .8, .3, 1);
+  --bh-ease-out: cubic-bezier(.16, 1, .3, 1);
+  --bh-dur-fast: 140ms;
+  --bh-dur-base: 200ms;
+  --bh-dur-slow: 240ms;
   position: fixed;
   inset: auto 16px 16px auto;
   z-index: 2147483646;
@@ -51,7 +58,9 @@
     cursor: pointer;
     text-align: center;
     overflow-wrap: anywhere;
+    transition: background-color var(--bh-dur-fast) var(--bh-ease), color var(--bh-dur-fast) var(--bh-ease), transform var(--bh-dur-fast) var(--bh-ease);
   }
+  & button:active:not(:disabled) { transform: scale(0.98); }
   & button:hover:not(:disabled) { background: var(--bh-wash); }
   & button:disabled { cursor: default; }
   & button:disabled:not(.bh-job-status, .bh-status-option) { opacity: .52; }
@@ -67,7 +76,7 @@
     background: var(--bh-paper);
   }
   &:has(.bh-widget-toggle[aria-expanded="false"]) { width: max-content; }
-  &:has(.bh-widget-toggle[aria-expanded="false"]) .bh-widget-header { min-height: 0; padding: 4px 8px; border: 0; }
+  &:has(.bh-widget-toggle[aria-expanded="false"]) .bh-widget-header { min-height: 0; padding: 4px 8px; gap: 4px; border: 0; }
   & .bh-widget-drag {
     flex: none;
     display: grid;
@@ -90,11 +99,28 @@
     font-weight: 600;
     overflow-wrap: anywhere;
   }
+  & .bh-company:not([hidden]) { animation: bh-fade-in var(--bh-dur-fast) var(--bh-ease-out); }
+  & .bh-company > .bh-favorite { align-items: center; block-size: 1lh; margin-inline-start: 4px; vertical-align: top; }
   & .bh-widget-drag:hover, & .bh-widget-toggle:hover:not(:disabled) { background: var(--bh-paper); color: var(--bh-ink); }
+  & .bh-widget-toggle .bh-icon { transition: rotate var(--bh-dur-base) var(--bh-ease-out), color var(--bh-dur-fast) var(--bh-ease); }
+  & .bh-widget-toggle[aria-expanded="false"] {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    inline-size: auto;
+    padding: 4px 4px 4px 8px;
+    color: var(--bh-ink);
+    font-weight: 600;
+    white-space: nowrap;
+    animation: bh-pill-in var(--bh-dur-fast) var(--bh-ease-out);
+  }
+  & .bh-widget-toggle[aria-expanded="false"] .bh-icon { color: var(--bh-muted); }
+  & .bh-widget-toggle[aria-expanded="false"]:hover:not(:disabled) { background: var(--bh-wash); color: var(--bh-ink); }
+  & .bh-widget-toggle[aria-expanded="false"]:hover:not(:disabled) .bh-icon { color: var(--bh-ink); }
 
-  & .bh-widget-body { display: flex; flex-direction: column; min-height: 0; }
+  & .bh-widget-body { display: flex; flex-direction: column; min-height: 0; animation: bh-expand-in var(--bh-dur-slow) var(--bh-ease-out); }
   & .bh-records { min-height: 0; overflow: auto; overscroll-behavior: contain; scroll-padding-block: 12px; }
-  & .bh-jobs { display: grid; gap: 4px; padding: 0 var(--bh-gutter); }
+  & .bh-jobs { display: grid; gap: 4px; padding: 0 var(--bh-gutter); animation: bh-fade-slide-in var(--bh-dur-base) var(--bh-ease-out); }
   & :is(.bh-job-heading-row, .bh-job-status-row) {
     display: flex;
     align-items: center;
@@ -108,9 +134,12 @@
     gap: var(--bh-gap);
     padding: 12px;
     border-radius: 8px;
+    transition: background-color var(--bh-dur-base) var(--bh-ease);
   }
   & .bh-job.bh-current { background: var(--bh-wash); }
   & .bh-heading-actions { display: flex; flex: none; align-items: center; gap: 4px; }
+  & .bh-heading-actions button { transition: opacity var(--bh-dur-fast) var(--bh-ease), background-color var(--bh-dur-fast) var(--bh-ease), color var(--bh-dur-fast) var(--bh-ease); }
+  & .bh-job-heading-row .bh-heading-actions { margin-inline-start: auto; }
   & .bh-icon-button {
     display: grid;
     flex: none;
@@ -122,8 +151,10 @@
     color: var(--bh-muted);
   }
   & .bh-icon-button[data-active="true"] { background: var(--bh-wash); color: var(--bh-accent); }
-  & .bh-favorite { flex: none; color: var(--bh-muted); font-size: 14px; }
-  & .bh-job-heading { min-width: 0; font-size: 16px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+  & .bh-favorite { display: inline-flex; flex: none; color: var(--bh-accent); vertical-align: middle; }
+  & .bh-job-closed { color: var(--bh-muted); font-weight: 500; }
+  & .bh-job-heading { min-width: 0; font-size: 16px; font-weight: 600; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  & .bh-job-heading:has(:focus-visible) { outline: 2px solid var(--bh-accent); outline-offset: 4px; }
   & a.bh-job-title { color: inherit; text-decoration: underline; text-decoration-color: var(--bh-control); text-underline-offset: 4px; }
   & a.bh-job-title:hover { color: var(--bh-accent); text-decoration-color: currentColor; }
   & .bh-job-status {
@@ -138,6 +169,7 @@
     text-align: start;
   }
   & .bh-job-status[aria-expanded="true"] { background: var(--bh-active); }
+  & :is(.bh-job-status, .bh-message-toggle) .bh-icon { transition: rotate var(--bh-dur-base) var(--bh-ease-out); }
   & :is(.bh-job-status, .bh-message-toggle)[aria-expanded="true"] .bh-icon,
   & .bh-widget-toggle[aria-expanded="false"] .bh-icon { rotate: 180deg; }
 
@@ -146,7 +178,7 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--bh-gap);
   }
-  & .bh-status-option { padding: 8px; text-align: start; text-wrap: balance; }
+  & .bh-status-option { padding: 8px; text-align: start; text-wrap: balance; transition: background-color var(--bh-dur-fast) var(--bh-ease), color var(--bh-dur-fast) var(--bh-ease); }
   & .bh-status-option:disabled { background: var(--bh-active); color: var(--bh-accent); opacity: 1; }
   & .bh-layer {
     position: fixed;
@@ -166,14 +198,18 @@
     font-size: 14px;
     overflow-wrap: anywhere;
   }
-  & dialog.bh-layer { inset: 0; margin: auto; height: max-content; }
-  & dialog.bh-layer::backdrop { background: rgb(0 0 0 / 36%); }
-  & .bh-layer h3 { margin-bottom: 8px; font-size: 18px; font-weight: 600; }
+  & div.bh-layer { animation: bh-layer-in var(--bh-dur-base) var(--bh-ease-out); }
+  & dialog.bh-layer { inset: 0; margin: auto; height: max-content; animation: bh-dialog-in var(--bh-dur-base) var(--bh-ease-out); }
+  & dialog.bh-layer::backdrop { background: rgb(0 0 0 / 36%); animation: bh-backdrop-in var(--bh-dur-fast) var(--bh-ease); }
+  & .bh-layer h3 { margin-bottom: 8px; font-size: 18px; font-weight: 600; line-height: 1.4; }
   & .bh-layer p { margin-block: var(--bh-gap); color: var(--bh-muted); }
   & .bh-layer .bh-status-error { color: var(--bh-danger); }
   & .bh-layer .bh-editor-actions, & .bh-layer-close, & .bh-layer .bh-note-input { margin-top: var(--bh-gap); }
   & .bh-layer-close { width: 100%; }
-  & .bh-confirm-delete { color: var(--bh-danger); }
+  & :is(.bh-cancel, .bh-layer-close) { background: var(--bh-wash); }
+  & :is(.bh-cancel, .bh-layer-close):hover:not(:disabled) { background: var(--bh-active); }
+  & .bh-confirm-delete { display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: var(--bh-danger); color: #fff; }
+  & .bh-confirm-delete:hover:not(:disabled) { background: var(--bh-danger-hover); }
 
   & .bh-message-preview {
     --bh-message-line: 20px;
@@ -187,8 +223,9 @@
   & .bh-message-preview:has(.bh-message-toggle) {
     grid-template-columns: 36px minmax(0, 1fr) var(--bh-control-height);
   }
-  & .bh-message-in .bh-message-sender { color: var(--bh-accent); }
+  & .bh-message-in .bh-message-sender { color: var(--bh-incoming-message); }
   & .bh-message-body[data-expanded="false"] { max-height: calc(2 * var(--bh-message-line)); overflow: hidden; }
+  & .bh-message-body[data-expanded="true"] { animation: bh-fade-in var(--bh-dur-fast) var(--bh-ease-out); }
   & .bh-message-text { display: block; overflow-wrap: anywhere; white-space: pre-wrap; }
   & .bh-message-preview > .message-receipt {
     grid-column: 2;
@@ -223,7 +260,10 @@
   & .bh-note-history { color: var(--bh-muted); font-size: 14px; }
   & .bh-note-history summary { cursor: pointer; }
   & .bh-note-history .bh-note-text { margin-top: 4px; }
+  & .bh-note-history[open] .bh-note-text { animation: bh-fade-in var(--bh-dur-fast) var(--bh-ease-out); }
   & :is(.bh-notice, .bh-empty) { padding: 8px 16px; color: var(--bh-muted); overflow-wrap: anywhere; }
+  & .bh-notice[data-loading="true"] { display: flex; align-items: center; gap: 6px; }
+  & .bh-skeleton-card { padding: 12px var(--bh-gutter); }
   & .bh-empty { padding-block: 16px; }
 
   & .bh-controls { display: flex; flex: none; gap: 8px; padding: 12px var(--bh-gutter); }
@@ -254,7 +294,7 @@
     font-size: var(--bh-input-size, 14px);
   }
   & .bh-editor-feedback { margin-bottom: 8px; color: var(--bh-muted); overflow-wrap: anywhere; }
-  & .bh-save { border-color: var(--bh-accent); background: var(--bh-accent); color: #fff; }
+  & .bh-save { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-color: var(--bh-accent); background: var(--bh-accent); color: #fff; }
   & .bh-save:hover:not(:disabled) { background: var(--bh-accent-hover); }
 }
 
@@ -273,6 +313,31 @@
     width: min(368px, calc(100vw - 16px));
     padding: 16px;
   }
+}
+
+@keyframes bh-expand-in { from { opacity: 0; transform: translateY(6px); } }
+@keyframes bh-pill-in { from { opacity: 0.7; transform: scale(0.96); } }
+@keyframes bh-fade-in { from { opacity: 0; } }
+@keyframes bh-fade-slide-in { from { opacity: 0; transform: translateY(4px); } }
+@keyframes bh-layer-in { from { opacity: 0; transform: translateY(6px) scale(0.985); } }
+@keyframes bh-dialog-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } }
+@keyframes bh-backdrop-in { from { opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  #boss-local-helper-widget .bh-heading-actions button,
+  #boss-local-helper-widget button,
+  #boss-local-helper-widget .bh-job,
+  #boss-local-helper-widget .bh-widget-toggle .bh-icon,
+  #boss-local-helper-widget :is(.bh-job-status, .bh-message-toggle) .bh-icon { transition: none; }
+  #boss-local-helper-widget .bh-widget-body,
+  #boss-local-helper-widget .bh-company:not([hidden]),
+  #boss-local-helper-widget .bh-widget-toggle[aria-expanded="false"],
+  #boss-local-helper-widget .bh-jobs,
+  #boss-local-helper-widget div.bh-layer,
+  #boss-local-helper-widget dialog.bh-layer,
+  #boss-local-helper-widget dialog.bh-layer::backdrop,
+  #boss-local-helper-widget .bh-message-body[data-expanded="true"],
+  #boss-local-helper-widget .bh-note-history[open] .bh-note-text { animation: none; }
 }
 
 @media (pointer: coarse) {

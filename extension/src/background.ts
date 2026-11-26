@@ -1,11 +1,14 @@
 import type {ExternalRecord, Contributions, JobRecord, TimedHumanMessagePreview} from './types.ts';
 type Change = [string, 'put' | 'delete', any];
 
-import {inferStatus, isChatMessage, isWithdrawn, mergeAutoContribution, mergeJob, validStatus} from './core.ts';
+import {inferStatus, isChatMessage, isCompetitionCard, isCompetitionSummary, isWithdrawn, mergeAutoContribution, mergeJob, validStatus} from './core.ts';
 import {registerBuildReload} from './build-reload.ts';
 import {normalizeStatus} from './status.ts';
 import {syncInterval, syncIntervalSeconds, validSyncInterval} from './sync-interval.ts';
-const DB_NAME='boss-local-helper', DB_VERSION=2, STATUS_SCHEMA=6;
+import {validActivityWindow, withinActivityWindow} from './activity-window.ts';
+import {readBackup} from './backup.ts';
+import {isCompanyJobsPath} from './company-jobs.ts';
+const DB_NAME='boss-local-helper', DB_VERSION=2, STATUS_SCHEMA=7;
 const SITE_ORIGINS=['https://www.zhipin.com','http://127.0.0.1:4173','http://localhost:4173'];
 const siteOrigin=(value?: string)=>{try{const url=new URL(value || '');return SITE_ORIGINS.includes(url.origin)?url.origin:null;}catch{return null;}};
 const sourceGroup=(value?: string)=>{const origin=siteOrigin(value);return !origin?null:origin===SITE_ORIGINS[0]?'real':'mock';};
@@ -15,9 +18,20 @@ const dbPromise=new Promise<IDBDatabase>((resolve,reject)=>{const req=indexedDB.
 function op(store: string, method: 'getAll', value?: IDBValidKey): Promise<ExternalRecord[]>;
 function op(store: string, method: 'get', value: IDBValidKey): Promise<ExternalRecord | undefined>;
 function op(store: string, method: 'put' | 'delete', value: any): Promise<unknown>;
-async function op(store: string, method: 'get' | 'getAll' | 'put' | 'delete', value?: any) {const db=await dbPromise;return new Promise((resolve,reject)=>{const tx=db.transaction(store,method==='get'||method==='getAll'?'readonly':'readwrite');let result: unknown;const req=tx.objectStore(store)[method](value);req.onsuccess=()=>{result=req.result;};tx.oncomplete=()=>resolve(result);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('数据库写入中断'));});}
+async function op(store: string, method: 'get' | 'getAll' | 'put' | 'delete', value?: any) {const db=await dbPromise;return new Promise((resolve,reject)=>{const writing=method==='put'||method==='delete';const tx=db.transaction(store,writing?'readwrite':'readonly');let result: unknown;const req=tx.objectStore(store)[method](value);req.onsuccess=()=>{result=req.result;};tx.oncomplete=()=>{if(writing&&affectsDashboard(store,value))notifyDashboard();resolve(result);};tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('数据库写入中断'));});}
 async function conversationMessages(id: string): Promise<ExternalRecord[]>{const db=await dbPromise;return new Promise((resolve,reject)=>{const tx=db.transaction('messages','readonly');const req=tx.objectStore('messages').index('conversationId').getAll(id);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
-async function commit(changes: Change[]){const db=await dbPromise;return new Promise<void>((resolve,reject)=>{const tx=db.transaction(['companies','jobs','conversations','messages','events'],'readwrite');try{for(const [store,method,value] of changes)tx.objectStore(store)[method](value);}catch(error: any){tx.abort();reject(error);return;}tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('数据库写入失败'));tx.onabort=()=>reject(tx.error||new Error('数据库写入中断'));});}
+async function commit(changes: Change[]){if(!changes.length)return;const db=await dbPromise;return new Promise<void>((resolve,reject)=>{const tx=db.transaction([...new Set(changes.map(([store])=>store))],'readwrite');try{for(const [store,method,value] of changes)tx.objectStore(store)[method](value);}catch(error: any){tx.abort();reject(error);return;}tx.oncomplete=()=>{if(changes.some(([store,,value])=>affectsDashboard(store,value)))notifyDashboard();resolve();};tx.onerror=()=>reject(tx.error||new Error('数据库写入失败'));tx.onabort=()=>reject(tx.error||new Error('数据库写入中断'));});}
+function affectsDashboard(store: string,value: ExternalRecord){
+  return store!=='meta'||value?.id==='accounts'||value?.id==='activeAccount'||/:(sync|syncIntervalSeconds|accountName)$/.test(value?.id);
+}
+let dashboardNotification: ReturnType<typeof setTimeout> | undefined;
+function notifyDashboard(){
+  if(dashboardNotification!==undefined)return;
+  dashboardNotification=setTimeout(()=>{
+    dashboardNotification=undefined;
+    chrome.runtime.sendMessage?.({type:'DASHBOARD_CHANGED'})?.catch(()=>{});
+  },120);
+}
 let queue: Promise<unknown>=Promise.resolve();
 function serialize<Result>(fn: () => Result | Promise<Result>){const run=queue.then(fn);queue=run.catch(()=>{});return run;}
 const key=(a: string,id: string)=>`${a}:${id}`;
@@ -70,6 +84,7 @@ async function saveJob(message: ExternalRecord,origin?: string | null){
     company=await noteCompany(account,context.companyId,context.companyName);
     const jobSite=origin||(await accountSource(account)==='mock'?SITE_ORIGINS[1]:SITE_ORIGINS[0]);
     job={id:message.jobId,account,companyId:company.id,title:context.title.trim(),url:jobSite+'/job_detail/'+encodeURIComponent(message.jobId.slice(key(account,'job:').length))+'.html',autoContributions:{},autoSchemaVersion:STATUS_SCHEMA,autoStatus:'unknown',autoLabel:'未知',status:'unknown',manual:false,manualStatus:null,conversationIds:[],firstConversationAt:0};
+    if(origin)observeJobClosure(job,context.jobClosed);
   }else if(hasStatus&&message.status==='auto'){
     await ensureStatusSchema(account);
     job=await op('jobs','get',message.jobId);
@@ -99,13 +114,16 @@ async function accountSource(account: string,expected?: string | null){
   if(!['real','mock'].includes(group)||expected&&group!==expected)throw new Error('账号与页面来源不匹配');
   return group;
 }
-async function registerAccount(account: string,group: string){
+async function registerAccount(account: string,group: string,displayName?: unknown){
   const accounts=await meta('accounts',[]),active=await currentAccount();
   let known=accounts.includes(account)||active===account;
   if(!known)for(const store of stores.filter(s=>s!=='meta'))if((await op(store,'getAll')).some(record=>record.account===account)){known=true;break;}
   if(known)await accountSource(account,group);
   else await setMeta(key(account,'sourceGroup'),group);
-  if(active&&!accounts.includes(active))accounts.push(active);if(!accounts.includes(account))accounts.push(account);await setMeta('accounts',accounts);if(!active)await setMeta('activeAccount',account);
+  if(active&&!accounts.includes(active)||!accounts.includes(account))await setMeta('accounts',[...new Set([...accounts,...(active?[active]:[]),account])]);if(!active)await setMeta('activeAccount',account);
+  const name=typeof displayName==='string'?displayName.trim().slice(0,120):'';
+  const nameKey=key(account,'accountName');
+  if(name&&name!==await meta(nameKey,''))await setMeta(nameKey,name);
 }
 async function requireSiteAccount(account: string,sender: chrome.runtime.MessageSender){
   if(typeof account!=='string'||!account)throw new Error('页面账号尚未识别，请稍后重试');
@@ -115,6 +133,32 @@ async function requireSiteAccount(account: string,sender: chrome.runtime.Message
   if(!bound){const saved=await meta('tab-binding:'+sender.tab!.id,null);if(saved?.group===sourceGroup(sender.url)){bound=saved.account;tabAccounts.set(sender.tab!.id,bound!);}}
   if(bound!==account)throw new Error('页面账号尚未识别或不匹配，请刷新页面');
 }
+
+async function importBackup(json: unknown){
+  const backup=readBackup(json),{account}=backup;
+  const accounts: string[]=await meta('accounts',[]);
+  if(accounts.includes(account)&&(await syncTask(account)).running)throw new Error('请先停止该账号的采集');
+  const knownGroup=await accountSource(account).catch(()=>null);
+  const jobGroups=new Set(backup.tables.find(([store])=>store==='jobs')?.[1].map(job=>sourceGroup(job.url)).filter(Boolean));
+  if(jobGroups.size>1||backup.sourceGroup&&jobGroups.size&&!jobGroups.has(backup.sourceGroup))throw new Error('备份包含不同来源的职位');
+  const group=backup.sourceGroup??[...jobGroups][0]??knownGroup;
+  if(knownGroup&&group!==knownGroup)throw new Error('备份与现有账号的来源不一致');
+  const changes: Change[]=[];
+  let added=0,skipped=0;
+  for(const [store,rows] of backup.tables){
+    const existing=new Set((await op(store,'getAll')).map(row=>row.id));
+    for(const row of rows){
+      if(existing.has(row.id)){skipped++;continue;}
+      changes.push([store,'put',row]);added++;
+    }
+  }
+  if(group&&!knownGroup)changes.push(['meta','put',{id:key(account,'sourceGroup'),value:group}]);
+  if(!accounts.includes(account))changes.push(['meta','put',{id:'accounts',value:[...accounts,account]}]);
+  if(!await currentAccount())changes.push(['meta','put',{id:'activeAccount',value:account}]);
+  if(added)changes.push(['meta','delete',key(account,'conversationOrderVersion')]);
+  await commit(changes);
+  return {ok:true,account,added,skipped};
+}
 async function resolveAccount(requested?: string | null): Promise<string>{const accounts=await meta('accounts',[]), account=requested===undefined?await currentAccount():requested;if(!accounts.includes(account))throw new Error('未知账号');return account;}
 async function addEvent(account: string,jobId: string,status: string,source: string,evidence: string){await op('events','put',{id:key(account,crypto.randomUUID()),account,jobId,status,source,evidence,time:Date.now()});}
 const tabAccounts=new Map<number | undefined, string>();
@@ -122,7 +166,7 @@ const RUN_LEASE_MS=90000;
 async function syncTask(account: string){
   let task=await meta(key(account,'sync'),{});
   if(task.running&&(!task.runId||!Number.isInteger(task.tabId)||Date.now()-(Number(task.updatedAt)||0)>RUN_LEASE_MS)){
-    task={...task,running:false,complete:false,interrupted:true,message:'同步已中断，可重试',updatedAt:Date.now()};
+    task={...task,running:false,complete:false,interrupted:true,message:'采集已中断，可重试',updatedAt:Date.now()};
     await setMeta(key(account,'sync'),task);
   }
   return task;
@@ -135,7 +179,7 @@ if (chrome.alarms) registerBuildReload(reload => serialize(async () => {
 }));
 async function requireRun(d: ExternalRecord,sender: chrome.runtime.MessageSender){
   const task=await syncTask(d.account);
-  if(!task.running||!d.runId||task.runId!==d.runId||task.tabId!==sender.tab!.id)throw new Error('同步任务已过期或不属于此标签页');
+  if(!task.running||!d.runId||task.runId!==d.runId||task.tabId!==sender.tab!.id)throw new Error('采集任务已过期或不属于此标签页');
   return task;
 }
 function invalidateTab(id: number){
@@ -144,18 +188,28 @@ function invalidateTab(id: number){
     await op('meta','delete','tab-binding:'+id);
     for(const account of await meta('accounts',[])){
       const task=await syncTask(account);
-      if(task.running&&task.tabId===id)await setMeta(key(account,'sync'),{...task,running:false,complete:false,interrupted:true,message:'聊天页已关闭或重新加载，同步已中断',updatedAt:Date.now()});
+      if(task.running&&task.tabId===id)await setMeta(key(account,'sync'),{...task,running:false,complete:false,interrupted:true,message:'聊天页已关闭或重新加载，采集已中断',updatedAt:Date.now()});
     }
   }).catch(()=>{});
 }
 chrome.tabs.onRemoved.addListener(invalidateTab);
 chrome.tabs.onUpdated.addListener((id,change)=>{if(change.url||change.status==='loading')invalidateTab(id);});
 function validate(value: unknown,depth=0){if(depth>8)throw new Error('数据结构过深');if(typeof value==='string'&&value.length>6000)throw new Error('字符串过长');if(typeof value==='number'&&!Number.isFinite(value))throw new Error('无效数字');if(value&&typeof value==='object'){if(Array.isArray(value)){if(value.length>10000)throw new Error('数据过多');for(const item of value)validate(item,depth+1);}else{const entries=Object.entries(value);if(entries.length>100)throw new Error('字段过多');for(const [name,item] of entries){if(name.length>100||name==='__proto__'||name==='constructor'||name==='prototype')throw new Error('无效字段');if((name==='id'||name==='jobId'||name==='selectedId'||name==='conversationId')&&item!=null&&(typeof item!=='string'||item.length>200))throw new Error('无效 ID');validate(item,depth+1);}}}}
-function validateIngest(d: ExternalRecord){if(!d||typeof d!=='object'||Array.isArray(d)||typeof d.account!=='string'||!/^[a-f0-9]{24}$/.test(d.account))throw new Error('未识别账号');validate(d);if(d.type==='SNAPSHOT'&&(!Array.isArray(d.rows)||d.rows.length>10000||d.liveMessages!==undefined&&(!Array.isArray(d.liveMessages)||d.liveMessages.length>2000)))throw new Error('无效会话列表');if(d.type==='CONVERSATION'&&(!d.row||typeof d.row!=='object'||Array.isArray(d.row)||!d.row.id||!Array.isArray(d.messages||[])||(d.messages||[]).length>2000))throw new Error('无效会话数据');if(d.type==='SNAPSHOT'&&d.rows.some((row: ExternalRecord)=>!row||typeof row!=='object'||Array.isArray(row)||!row.id))throw new Error('无效会话数据');if(d.type==='CONVERSATION'&&((d.detail!=null&&(typeof d.detail!=='object'||Array.isArray(d.detail)))||(d.history!=null&&(typeof d.history!=='object'||Array.isArray(d.history)))||(d.messages||[]).some((m: ExternalRecord)=>!m||typeof m!=='object'||Array.isArray(m))))throw new Error('无效会话数据');for(const row of d.type==='SNAPSHOT'?d.rows:d.type==='CONVERSATION'?[d.row]:[]){for(const field of ['name','companyName','jobId','jobTitle','lastText'])if(row[field]!=null&&typeof row[field]!=='string')throw new Error('无效会话字段');}for(const field of ['companyName','jobId','title','salary','location','experience','degree'])if(d.detail?.[field]!=null&&typeof d.detail[field]!=='string')throw new Error('无效职位字段');if(d.type==='SYNC_PROGRESS'&&(!d.sync||typeof d.sync!=='object'||Array.isArray(d.sync)||typeof d.sync.running!=='boolean'))throw new Error('无效同步进度');}
+function validateIngest(d: ExternalRecord){if(!d||typeof d!=='object'||Array.isArray(d)||typeof d.account!=='string'||!/^[a-f0-9]{24}$/.test(d.account))throw new Error('未识别账号');validate(d);if(d.type==='SNAPSHOT'&&(!Array.isArray(d.rows)||d.rows.length>10000||d.liveMessages!==undefined&&(!Array.isArray(d.liveMessages)||d.liveMessages.length>2000)))throw new Error('无效会话列表');if(d.type==='CONVERSATION'&&(!d.row||typeof d.row!=='object'||Array.isArray(d.row)||!d.row.id||!Array.isArray(d.messages||[])||(d.messages||[]).length>2000))throw new Error('无效会话数据');if(d.type==='SNAPSHOT'&&d.rows.some((row: ExternalRecord)=>!row||typeof row!=='object'||Array.isArray(row)||!row.id))throw new Error('无效会话数据');if(d.type==='CONVERSATION'&&((d.detail!=null&&(typeof d.detail!=='object'||Array.isArray(d.detail)))||(d.history!=null&&(typeof d.history!=='object'||Array.isArray(d.history)))||(d.messages||[]).some((m: ExternalRecord)=>!m||typeof m!=='object'||Array.isArray(m))))throw new Error('无效会话数据');for(const row of d.type==='SNAPSHOT'?d.rows:d.type==='CONVERSATION'?[d.row]:[]){for(const field of ['name','companyName','jobId','jobTitle','lastText'])if(row[field]!=null&&typeof row[field]!=='string')throw new Error('无效会话字段');}for(const field of ['companyName','jobId','title','salary','location','experience','degree'])if(d.detail?.[field]!=null&&typeof d.detail[field]!=='string')throw new Error('无效职位字段');if(d.type==='SYNC_PROGRESS'&&(!d.sync||typeof d.sync!=='object'||Array.isArray(d.sync)||typeof d.sync.running!=='boolean'))throw new Error('无效采集进度');}
+function observeJobClosure(job: ExternalRecord, closed: unknown) {
+  if(typeof closed!=='boolean'||job.jobClosed===closed)return false;
+  if(closed||job.jobClosed===true)job.jobClosedObservedAt=Date.now();
+  job.jobClosed=closed;
+  return true;
+}
+function validateJobClosure(value: ExternalRecord){
+  if(Object.hasOwn(value,'jobClosed')&&typeof value.jobClosed!=='boolean')throw new Error('无效职位关闭状态');
+}
 function validateFavorites(rows: ExternalRecord[]){
   if(!Array.isArray(rows)||rows.length>10000)throw new Error('无效收藏列表');
   for(const row of rows){
     if(!row||typeof row!=='object'||Array.isArray(row)||typeof row.jobId!=='string'||!/^[a-zA-Z0-9_-]{1,150}$/.test(row.jobId)||typeof row.favorite!=='boolean')throw new Error('无效收藏职位');
+    validateJobClosure(row);
     for(const [field,max] of [['companyName',180],['title',200],['salary',100],['location',100],['experience',100],['degree',100]] as const)if(row[field]!=null&&(typeof row[field]!=='string'||row[field].length>max))throw new Error('无效收藏字段');
     if(row.favorite&&(!row.companyName?.trim()||!row.title?.trim()))throw new Error('收藏职位缺少公司或标题');
   }
@@ -172,11 +226,27 @@ async function ingestFavorites(account: string,rows: ExternalRecord[],origin: st
     if(row.favorite&&!company)changes.push(['companies','put',{id:companyId,account,name:row.companyName.trim(),updatedAt:Date.now()}]);
     const next: ExternalRecord=previous?{...previous}:{id,account,companyId,title:row.title.trim(),status:'unknown',autoStatus:'unknown',manual:false,manualStatus:null,autoContributions:{},autoSchemaVersion:STATUS_SCHEMA,conversationIds:[],firstConversationAt:0};
     next.favorite=row.favorite;
+    if(row.favorite)observeJobClosure(next,row.jobClosed);
     next.url=jobOrigin(previous?.url,origin)+'/job_detail/'+encodeURIComponent(row.jobId)+'.html';
     for(const field of ['salary','location','experience','degree'])if(!next[field]&&row[field])next[field]=row[field];
     if(!previous||Object.entries(next).some(([field,value])=>!Object.is(previous[field],value)))changes.push(['jobs','put',{...next,updatedAt:Date.now()}]);
   }
   if(changes.length){await commit(changes);chrome.runtime.sendMessage?.({type:'FAVORITES_CHANGED',account})?.catch(()=>{});}
+}
+function validateCompanyFavorites(rows: ExternalRecord[]){
+  if(!Array.isArray(rows)||rows.length>10000||rows.some(row=>!row||typeof row.companyName!=='string'||!row.companyName.trim()||row.companyName.length>180||typeof row.favorite!=='boolean'))throw new Error('无效收藏公司');
+}
+async function ingestCompanyFavorites(account: string,rows: ExternalRecord[]){
+  const changes: Change[]=[];
+  for(const [id,row] of new Map(rows.map(row=>[companyKey(account,row.companyName),row]))){
+    const previous=await op('companies','get',id);
+    if(previous?.deleted||!!previous?.favorite===row.favorite)continue;
+    changes.push(['companies','put',{...previous,id,account,name:previous?.name||row.companyName.trim(),favorite:row.favorite,updatedAt:Date.now()}]);
+  }
+  if(changes.length){await commit(changes);chrome.runtime.sendMessage?.({type:'FAVORITES_CHANGED',account})?.catch(()=>{});}
+}
+function awaitingContact(job: ExternalRecord,withMessages: Set<string>){
+  return !job.manual&&!job.manualStatus&&(!job.status||job.status==='unknown')&&!withMessages.has(job.id);
 }
 async function ingestBatch(account: string,items: ExternalRecord[],selectedId?: string,origin='https://www.zhipin.com'){
   const changes: Change[]=[], cache=new Map();let summary: ExternalRecord | null=null,legacyConversations: ExternalRecord[] | undefined;
@@ -212,7 +282,7 @@ async function ingestBatch(account: string,items: ExternalRecord[],selectedId?: 
     const jobToken=detail.jobId||row.jobId, jid=jobToken?key(account,'job:'+jobToken):null;
     const storedPrevious=jid?await get('jobs',jid):null;
     const previous=storedPrevious?.deleted?null:await migrateContributions(storedPrevious);
-    const companyName=String(detail.companyName||(!previous?.detailCompany&&row.companyName)||'待识别公司').slice(0,180);
+    const companyName=String(detail.companyName||(!previous?.detailCompany&&row.companyName)||'公司待识别').slice(0,180);
     const companyId=storedPrevious?.deleted&&storedPrevious.companyId?storedPrevious.companyId:detail.companyName||!previous?.companyId?companyKey(account,companyName):previous.companyId;
     const company=await get('companies',companyId);
     if(!company?.deleted&&(!previous?.companyId||detail.companyName||!previous?.detailCompany))put('companies',{...company,id:companyId,account,name:companyName,updatedAt:Date.now()});
@@ -260,8 +330,8 @@ async function ingestBatch(account: string,items: ExternalRecord[],selectedId?: 
     if(history?.runId){
       const runs={...storedHistory?.syncRuns};
       const previousRun=runs[history.runId];
-      if(history.pages!==(previousRun?.pages||0)+1||history.continuousFromStart!==true)throw new Error('同步页序不连续');
-      const proof={runId:history.runId,pages:history.pages,serverReportsEnd:history.serverReportsEnd===true,continuousFromStart:true,count:history.count,updatedAt:Date.now()};
+      if(history.pages!==(previousRun?.pages||0)+1||history.continuousFromStart!==true)throw new Error('采集页序不连续');
+      const proof={runId:history.runId,pages:history.pages,serverReportsEnd:history.serverReportsEnd===true,continuousFromStart:true,count:history.count,updatedAt:Date.now(),activityWindow:history.activityWindow??null};
       runs[history.runId]=proof;
       storedHistory={...storedHistory,...proof,syncRuns:runs};
     }else if(history){
@@ -329,7 +399,8 @@ function visibleJobs(jobs: ExternalRecord[],conversations: ExternalRecord[]){
 }
 const messageIdOrder = new Intl.Collator('en', {numeric: true});
 const messageReceipt = (status: unknown) => status === 2 ? 'read' : status === 1 ? 'delivered' : undefined;
-async function latestJobMessages(account: string, related: JobRecord[], allJobs: ExternalRecord[], conversations: ExternalRecord[], includeListPreview = false) {
+async function latestJobMessages(account: string, related: JobRecord[], allJobs: ExternalRecord[], conversations: ExternalRecord[], options: {includeListPreview?: boolean; activity?: Map<string, Set<number>>; withMessages?: Set<string>} = {}) {
+  const {includeListPreview, activity, withMessages} = options;
   if (!related.length) return new Map<string, TimedHumanMessagePreview>();
   const relevantJobs = new Map(related.map(job => [job.id, job]));
   const associations = new Map<string, Set<string>>(conversations.map(conversation => [conversation.id, new Set(conversation.jobIds || [])]));
@@ -345,14 +416,36 @@ async function latestJobMessages(account: string, related: JobRecord[], allJobs:
     const soleJob = jobIds.size === 1 ? jobIds.values().next().value : undefined;
     const listJob = key(account, 'job:' + conversation.jobId) === soleJob ? soleJob : undefined;
     const listTime = earliest(conversation.lastMessageAt);
+    function recordActivity(jobId: string, time: number) {
+      if (!activity || !time) return;
+      const day = new Date(time).setHours(0, 0, 0, 0);
+      if (!Number.isFinite(day)) return;
+      const times = activity.get(jobId) ?? new Set<number>();
+      times.add(day);
+      activity.set(jobId, times);
+    }
     const listText = typeof conversation.lastText === 'string' ? conversation.lastText.trim() : '';
+    const messages = await conversationMessages(conversationId);
+    const competitionSummary = isCompetitionSummary(listText, messages);
+    if (!competitionSummary && (listTime || listText)) {
+      const currentJob = key(account, 'job:' + conversation.jobId);
+      if (jobIds.has(currentJob)) withMessages?.add(currentJob);
+      else if (soleJob) withMessages?.add(soleJob);
+    }
     const listReceipt = conversation.lastIsSelf === true ? messageReceipt(conversation.lastMsgStatus) : undefined;
     let newestSavedAt = 0;
-    for (const message of await conversationMessages(conversationId)) {
+    for (const message of messages) {
+      if (isCompetitionCard(message)) continue;
       const time = earliest(message.time);
       newestSavedAt = Math.max(newestSavedAt, time);
       const jobId = message.jobId ? key(account, 'job:' + message.jobId) : soleJob;
-      if (!jobId || !jobIds.has(jobId) || !relevantJobs.has(jobId) || !isChatMessage(message)) continue;
+      if (withMessages) {
+        if (jobId && jobIds.has(jobId)) withMessages.add(jobId);
+        else if (!message.jobId) for (const possibleJob of jobIds) withMessages.add(possibleJob);
+      }
+      if (!jobId || !jobIds.has(jobId) || !relevantJobs.has(jobId)) continue;
+      recordActivity(jobId, time);
+      if (!isChatMessage(message)) continue;
       const image = message.messageType === 'image' || Number(message.bodyType) === 3;
       const text = (typeof message.text === 'string' ? message.text.trim() : '') || (image ? '[图片]' : '');
       if (!text) continue;
@@ -365,7 +458,7 @@ async function latestJobMessages(account: string, related: JobRecord[], allJobs:
       latest.set(jobId, {text, direction, time, messageId, ...(receipt ? {receipt} : {})});
     }
     if (!includeListPreview || !listJob || typeof conversation.lastIsSelf !== 'boolean') continue;
-    if (listTime <= Math.max(newestSavedAt, latest.get(listJob)?.time ?? 0) || !listText || isWithdrawn(listText)) continue;
+    if (listTime <= Math.max(newestSavedAt, latest.get(listJob)?.time ?? 0) || !listText || isWithdrawn(listText) || competitionSummary) continue;
     const inferred = relevantJobs.get(listJob)?.autoContributions?.[conversationId]?.unverified;
     const status = conversation.lastIsSelf ? 'awaiting_boss' : 'awaiting_self';
     if (inferred?.status !== status || inferred.observedAt !== listTime) continue;
@@ -374,7 +467,7 @@ async function latestJobMessages(account: string, related: JobRecord[], allJobs:
   }
   return new Map([...latest].map(([jobId, {messageId, ...preview}]) => [jobId, preview]));
 }
-async function data(account: string,includeHidden=false){const accounts=await meta('accounts',[]);const result: ExternalRecord={account,accounts,settings:{},sync:await syncTask(account)};for(const s of stores.filter(s=>s!=='meta'&&s!=='messages'))result[s]=(await op(s,'getAll')).filter(x=>x.account===account);result.jobs=result.jobs.filter((job: ExternalRecord)=>!job.deleted);if(!includeHidden)result.jobs=visibleJobs(result.jobs,result.conversations);const referenced=new Set([...result.jobs,...result.conversations].map((x: ExternalRecord)=>x.companyId).filter(Boolean));result.companies=result.companies.filter((x: ExternalRecord)=>!x.deleted&&(referenced.has(x.id)||typeof x.note==='string'&&x.note.length>0));return result;}
+async function data(account: string,includeHidden=false){const accounts=await meta('accounts',[]);const result: ExternalRecord={account,accounts,settings:{},sync:await syncTask(account)};for(const s of stores.filter(s=>s!=='meta'&&s!=='messages'))result[s]=(await op(s,'getAll')).filter(x=>x.account===account);result.jobs=result.jobs.filter((job: ExternalRecord)=>!job.deleted);if(!includeHidden)result.jobs=visibleJobs(result.jobs,result.conversations);const referenced=new Set([...result.jobs,...result.conversations].map((x: ExternalRecord)=>x.companyId).filter(Boolean));result.companies=result.companies.filter((x: ExternalRecord)=>!x.deleted&&(x.favorite===true||referenced.has(x.id)||typeof x.note==='string'&&x.note.length>0));return result;}
 function jobsWithStatusTimes(jobs: JobRecord[], events: ExternalRecord[]): JobRecord[] {
   const manualEvents = new Map<string, ExternalRecord>();
   for (const event of events) {
@@ -402,40 +495,47 @@ function jobsWithStatusTimes(jobs: JobRecord[], events: ExternalRecord[]): JobRe
   });
 }
 async function bossTab(account: string){const tabs=await chrome.tabs.query({url:SITE_ORIGINS.map(origin=>origin+'/web/geek/chat*')});const group=await accountSource(account);for(const tab of tabs){if(!tabAccounts.has(tab.id)&&sourceGroup(tab.url)===group){try{const r=await chrome.tabs.sendMessage(tab.id!,{type:'ACCOUNT_INFO'});if(r?.account===account)tabAccounts.set(tab.id,r.account);}catch{}}}const matching=tabs.filter(t=>tabAccounts.get(t.id)===account&&(!t.url||sourceGroup(t.url)===group));if(!matching.length)throw new Error('没有与该账号匹配的 BOSS 聊天页，请打开并刷新页面');return matching.find(t=>t.active)||matching[matching.length-1];}
-function openDashboardTab(windowId: number | undefined, view: 'board' | 'collection', account?: string) {
+function openDashboardTab(windowId: number | undefined, account?: string) {
   const url = new URL(chrome.runtime.getURL('dist/dashboard.html'));
   if (account) url.searchParams.set('account', account);
-  if (view === 'board') url.hash = 'board';
   return chrome.tabs.create({url: url.href, ...(Number.isInteger(windowId) ? {windowId} : {})});
 }
 
-chrome.action.onClicked.addListener(tab => openDashboardTab(tab?.windowId, 'board', tab?.id === undefined ? undefined : tabAccounts.get(tab.id)));
+chrome.action.onClicked.addListener(tab => openDashboardTab(tab?.windowId, tab?.id === undefined ? undefined : tabAccounts.get(tab.id)));
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
-  const fromSite=!!sender.tab&&(()=>{const origin=siteOrigin(sender.url);if(!origin)return false;try{const path=new URL(sender.url || '').pathname;return path.startsWith('/web/')||path.startsWith('/job_detail/');}catch{return false;}})();
+  const fromSite=!!sender.tab&&(()=>{const origin=siteOrigin(sender.url);if(!origin)return false;try{const path=new URL(sender.url || '').pathname;return path.startsWith('/web/')||path.startsWith('/job_detail/')||isCompanyJobsPath(path);}catch{return false;}})();
   const fromUI=sender.url?.startsWith(chrome.runtime.getURL(''));
   (async()=>{
     if(message.type==='INGEST'&&fromSite){return serialize(async()=>{
       const d=message.data;validateIngest(d);
       if(d.type==='FAVORITES')validateFavorites(d.rows);
+      if(d.type==='PAGE_CONTEXT')validateJobClosure(d);
       if(d.type==='PAGE_CONTEXT'&&Object.hasOwn(d,'favorite'))validateFavorites([d]);
+      if(d.type==='COMPANY_FAVORITES')validateCompanyFavorites(d.rows);
+      if(d.type==='PAGE_CONTEXT'&&Object.hasOwn(d,'companyFavorite'))validateCompanyFavorites([{companyName:d.companyName,favorite:d.companyFavorite}]);
       const task=d.runId||['SYNC_PROGRESS','SYNC_ERROR'].includes(d.type)?await requireRun(d,sender):null;
       if(d.type==='CONVERSATION'&&d.history&&(d.history.runId||d.history.continuousFromStart||d.history.serverReportsEnd||d.history.pages)){
-        if(!task||!d.requestId||d.history.runId!==d.runId||!Number.isInteger(d.history.pages)||d.history.pages<1)throw new Error('缺少本次同步保存凭据');
+        if(!task||!d.requestId||d.history.runId!==d.runId||!Number.isInteger(d.history.pages)||d.history.pages<1)throw new Error('缺少本次采集保存凭据');
       }
-      await registerAccount(d.account,sourceGroup(sender.url)!);
+      await registerAccount(d.account,sourceGroup(sender.url)!,d.accountName);
       await migrateInterviews(d.account);
       await ensureConversationOrder(d.account);
       tabAccounts.set(sender.tab!.id,d.account);
       await setMeta('tab-binding:'+sender.tab!.id,{account:d.account,group:sourceGroup(sender.url)});
       if(d.type==='FAVORITES'){await ingestFavorites(d.account,d.rows,siteOrigin(sender.url)!);return {ok:true,count:d.rows.length};}
+      if(d.type==='COMPANY_FAVORITES'){await ingestCompanyFavorites(d.account,d.rows);return {ok:true,count:d.rows.length};}
       if(d.type==='PAGE_CONTEXT'){
         if(typeof d.favorite==='boolean')await ingestFavorites(d.account,[d],siteOrigin(sender.url)!);
+        if(typeof d.companyFavorite==='boolean')await ingestCompanyFavorites(d.account,[{companyName:d.companyName,favorite:d.companyFavorite}]);
         let job=await op('jobs','get',key(d.account,'job:'+d.jobId));
         const pageJobId=new URL(sender.url!).pathname.match(/^\/job_detail\/([a-zA-Z0-9_-]{1,150})\.html$/)?.[1];
         const title=typeof d.title==='string'&&d.title.length<=200?d.title.trim():'';
-        if(job&&job.account===d.account&&!job.deleted&&pageJobId&&pageJobId===d.jobId&&title&&title!=='待识别 JD'&&(!job.title?.trim()||job.title==='待识别 JD')){
-          job={...job,title,detailTitle:true,updatedAt:Date.now()};
-          await op('jobs','put',job);
+        if(job&&job.account===d.account&&!job.deleted&&pageJobId===d.jobId){
+          const next={...job};
+          const closureChanged=observeJobClosure(next,d.jobClosed);
+          const titleChanged=title&&title!=='待识别 JD'&&(!job.title?.trim()||job.title==='待识别 JD');
+          if(titleChanged)Object.assign(next,{title,detailTitle:true});
+          if(closureChanged||titleChanged){job={...next,updatedAt:Date.now()};await op('jobs','put',job);}
         }
         const companies=(await op('companies','getAll')).filter(c=>c.account===d.account&&!c.deleted&&c.name===d.companyName);
         const jobs=(await op('jobs','getAll')).filter(j=>j.account===d.account&&!j.deleted&&companies.some(c=>c.id===j.companyId));
@@ -443,12 +543,15 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
       }
       if(d.type==='SNAPSHOT'){const summary=await ingestBatch(d.account,d.rows.map((row: ExternalRecord)=>({row})),d.selectedId,siteOrigin(sender.url)!);return {ok:true,summary,count:d.rows.length};}
       if(d.type==='CONVERSATION'){
-        const summary=await ingestBatch(d.account,[{row:d.row,detail:d.detail||{},messages:d.messages||[],history:d.history}],d.row.id,siteOrigin(sender.url)!);
+        const history=task&&d.history?.runId?{...d.history,activityWindow:task.activityWindow}:d.history;
+        const messages=d.messages||[];
+        if(task?.activityWindow&&messages.some((item: ExternalRecord)=>typeof item.time!=='number'||!withinActivityWindow(item.time,task.activityWindow)))throw new Error('消息时间超出本次采集范围');
+        const summary=await ingestBatch(d.account,[{row:d.row,detail:d.detail||{},messages,history}],d.row.id,siteOrigin(sender.url)!);
         if(task)await setMeta(key(d.account,'sync'),{...task,updatedAt:Date.now()});
         return {ok:true,summary};
       }
       if(d.type==='SYNC_PROGRESS'){
-        await setMeta(key(d.account,'sync'),{...d.sync,runId:task.runId,tabId:task.tabId,startedAt:task.startedAt,stopping:!!task.stopping,complete:!task.stopping&&!d.sync.running&&d.sync.complete===true,updatedAt:Date.now()});return {ok:true};
+        await setMeta(key(d.account,'sync'),{...d.sync,runId:task.runId,tabId:task.tabId,activityWindow:task.activityWindow,startedAt:task.startedAt,stopping:!!task.stopping,complete:!task.stopping&&!d.sync.running&&d.sync.complete===true,updatedAt:Date.now()});return {ok:true};
       }
       if(d.type==='SYNC_ERROR'){await op('events','put',{id:key(d.account,crypto.randomUUID()),account:d.account,conversationId:d.conversationId,source:'sync_error',evidence:String(d.error).slice(0,250),time:Date.now()});return {ok:true};}
       throw new Error('不支持的观察数据');
@@ -467,36 +570,42 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
       const company=companyId?await op('companies','get',companyId):null;
       if(company?.deleted)return {ok:true,data:{companyName:message.companyName||'',companyDeleted:true,jobs:[]}};
       const path=new URL(sender.url!).pathname;
-      const previewPage=/^\/web\/geek\/jobs\/?$/.test(path)||path==='/job_detail/'+message.jobId+'.html';
+      const previewPage=/^\/web\/geek\/jobs\/?$/.test(path)||path==='/job_detail/'+message.jobId+'.html'||isCompanyJobsPath(path);
       const previewJob=message.preview&&previewPage&&jobId&&/^[a-zA-Z0-9_-]{1,150}$/.test(message.jobId)&&companyId&&message.title?.trim()&&message.title.trim().length<=200&&!found?.deleted;
       const related=companyId?visible.filter(j=>j.companyId===companyId):[];
       if(previewJob&&found&&!job)related.push(found);
-      const latestMessages = await latestJobMessages(account, related, allJobs, conversations);
+      const withMessages=new Set<string>();
+      const latestMessages=await latestJobMessages(account,related,allJobs,conversations,{withMessages});
       let current=job?.id||(previewJob&&found?.id)||null;
       if(!jobId&&message.title){const matches=related.filter(j=>j.title===message.title);if(matches.length===1)current=matches[0].id;}
-      const jobs: ExternalRecord[]=related.map(j=>({id:j.id,title:j.title,url:j.url||'',updatedAt:j.updatedAt,favorite:j.favorite===true,status:j.status||'unknown',label:j.autoLabel||'',manual:!!j.manual,current:j.id===current,note:j.note??'',persisted:true,firstConversationAt:earliest(j.firstConversationAt),...(Array.isArray(j.noteConflicts)&&j.noteConflicts.length?{noteConflicts:j.noteConflicts.filter((n: ExternalRecord)=>typeof n?.text==='string').map((n: ExternalRecord)=>({text:n.text}))}:{})}));
+      const jobs: ExternalRecord[]=related.map(j=>({id:j.id,title:j.title,url:j.url||'',updatedAt:j.updatedAt,favorite:j.favorite===true,...(j.jobClosed===true?{jobClosed:true}:{}),status:j.status||'unknown',label:j.autoLabel||'',manual:!!j.manual,current:j.id===current,note:j.note??'',persisted:true,firstConversationAt:earliest(j.firstConversationAt),...(Array.isArray(j.noteConflicts)&&j.noteConflicts.length?{noteConflicts:j.noteConflicts.filter((n: ExternalRecord)=>typeof n?.text==='string').map((n: ExternalRecord)=>({text:n.text}))}:{})}));
       for (const job of jobs) {
+        if (awaitingContact(job,withMessages)) job.status = 'awaiting_contact';
         const preview = latestMessages.get(job.id);
         if (preview) {
           const {text,direction,receipt}=preview;
           job.latestMessage = {text,direction,...(receipt?{receipt}:{})};
         }
       }
-      if(!current&&!found&&(previewJob||(!message.preview&&message.title))){current=jobId;jobs.push({id:jobId,title:message.title,status:'unknown',manual:false,current:true,note:'',persisted:false,firstConversationAt:0});}
+      if(!current&&!found&&(previewJob||(!message.preview&&message.title))){current=jobId;jobs.push({id:jobId,title:message.title,status:previewJob?'awaiting_contact':'unknown',manual:false,current:true,note:'',persisted:false,firstConversationAt:0,...(message.jobClosed===true&&path==='/job_detail/'+message.jobId+'.html'?{jobClosed:true}:{})});}
       jobs.sort((a,b)=>{const timeA=a.firstConversationAt||Infinity,timeB=b.firstConversationAt||Infinity;if(timeA!==timeB)return timeA<timeB?-1:1;if(a.id==null)return b.id==null?0:1;if(b.id==null)return -1;return a.id<b.id?-1:a.id>b.id?1:0;});
-      return {ok:true,data:{companyId,companyName:company?.account===account?company!.name:(message.companyName||''),companyNote:company?.account===account?(company!.note??''):'',...(company?.account===account?{companyPersisted:true}:{}),settings:{},jobs,currentJobId:current}};
+      return {ok:true,data:{companyId,companyName:company?.account===account?company!.name:(message.companyName||''),companyNote:company?.account===account?(company!.note??''):'',...(company?.account===account?{companyPersisted:true,...(company?.favorite===true?{companyFavorite:true}:{})}:{}),settings:{},jobs,currentJobId:current}};
     });
     if(message.type==='DB_GET'&&(fromUI||fromSite))return serialize(async()=>{
       const account=fromSite?(message.account===undefined?tabAccounts.get(sender.tab!.id):message.account):(message.account===undefined?await currentAccount():await resolveAccount(message.account));
       if(fromSite)await requireSiteAccount(account,sender);
       await ensureStatusSchema(account);
       const snapshot=await data(account);
+      if(fromUI)snapshot.accountNames=Object.fromEntries(await Promise.all(snapshot.accounts.map(async (id: string)=>[id,await meta(key(id,'accountName'),'')])));
       if(fromUI&&account){
         snapshot.syncIntervalSeconds=syncIntervalSeconds(await meta(key(account,'syncIntervalSeconds'),undefined));
-        const latestMessages=await latestJobMessages(account,snapshot.jobs,snapshot.jobs,snapshot.conversations,true);
+        const activity=new Map<string,Set<number>>();
+        const withMessages=new Set<string>();
+        const latestMessages=await latestJobMessages(account,snapshot.jobs,snapshot.jobs,snapshot.conversations,{includeListPreview:true,activity,withMessages});
         snapshot.jobs=jobsWithStatusTimes(snapshot.jobs,snapshot.events).map(job=>{
           const latestMessage=latestMessages.get(job.id);
-          return latestMessage?{...job,latestMessage}:job;
+          const messageActivity=activity.get(job.id);
+          return {...job,...(awaitingContact(job,withMessages)?{status:'awaiting_contact'}:{}),...(latestMessage?{latestMessage}:{}),...(messageActivity?.size?{messageActivity:[...messageActivity]}:{})};
         });
       }
       return {ok:true,data:snapshot};
@@ -505,7 +614,7 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
       const account=message.account===undefined?tabAccounts.get(sender.tab!.id):message.account;
       if(typeof account!=='string'||!account)throw new Error('页面账号尚未识别，请稍后重试');
       await serialize(()=>requireSiteAccount(account,sender));
-      const tab=await openDashboardTab(sender.tab!.windowId,message.view==='board'?'board':'collection',account);
+      const tab=await openDashboardTab(sender.tab!.windowId,account);
       return {ok:true,tabId:tab?.id};
     }
     if(message.type==='SAVE_JOB'&&(fromUI||fromSite))return serialize(async()=>{if(fromSite)await requireSiteAccount(message.account,sender);return saveJob(message,fromSite?siteOrigin(sender.url):null);});
@@ -554,33 +663,36 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
       return {ok:true};
     });
     if(message.type==='SELECT_ACCOUNT')return serialize(async()=>{if(message.account===undefined)throw new Error('请选择账号');const a=await resolveAccount(message.account);await setMeta('activeAccount',a);return {ok:true};});
-    if(message.type==='EXPORT')return serialize(async()=>{const a=await resolveAccount(message.account);await ensureStatusSchema(a);const d=await data(a,true);d.messages=(await op('messages','getAll')).filter(x=>x.account===a);return {ok:true,data:d};});
+    if(message.type==='EXPORT')return serialize(async()=>{const a=await resolveAccount(message.account);await ensureStatusSchema(a);const d=await data(a,true);d.messages=(await op('messages','getAll')).filter(x=>x.account===a);const group=await accountSource(a).catch(()=>null);if(group)d.sourceGroup=group;return {ok:true,data:d};});
+    if(message.type==='IMPORT')return serialize(()=>importBackup(message.json));
     if(message.type==='SET_STATUS')return serialize(async()=>{const a=await resolveAccount(message.account);if(message.status!=='auto'&&!validStatus(message.status))throw new Error('无效状态');await ensureStatusSchema(a);const j=await op('jobs','get',message.jobId);if(!j||j.account!==a||j.deleted)throw new Error('找不到当前账号的 JD');j.manualStatus=message.status==='auto'?null:message.status;j.manual=!!j.manualStatus;j.status=j.manualStatus||j.autoStatus||'unknown';j.updatedAt=Date.now();await op('jobs','put',j);await addEvent(a,j.id,j.status,'manual',message.status==='auto'?'恢复自动状态':'用户修订');return {ok:true};});
     if(['SYNC','STOP_SYNC'].includes(message.type)){
       const account=await serialize(()=>resolveAccount(message.account));
       // Reserve under the DB queue, but never hold that queue while waiting for page ACKs.
       let task;
       let intervalSeconds: number | undefined;
+      const activityWindow=message.type==='SYNC'?message.activityWindow??null:null;
+      if(activityWindow!==null&&!validActivityWindow(activityWindow))throw new Error('无效采集日期范围');
       if(message.type==='SYNC'){
         const tab=await bossTab(account);
         task=await serialize(async()=>{
           const previous=await syncTask(account);
-          if(previous.running)throw new Error('该账号已有更新正在进行');
+          if(previous.running)throw new Error('该账号正在采集中');
           if(tabAccounts.get(tab.id)!==account)throw new Error('聊天页账号不匹配');
           intervalSeconds=syncIntervalSeconds(await meta(key(account,'syncIntervalSeconds'),undefined));
-          const next={runId:crypto.randomUUID(),tabId:tab.id,running:true,complete:false,processed:0,failed:0,startedAt:Date.now(),updatedAt:Date.now(),message:'正在启动同步'};
+          const next={runId:crypto.randomUUID(),tabId:tab.id,activityWindow,running:true,complete:false,processed:0,failed:0,startedAt:Date.now(),updatedAt:Date.now(),message:'正在启动采集'};
           await setMeta(key(account,'sync'),next);return next;
         });
       }else{
         task=await serialize(async()=>{
           const current=await syncTask(account);
-          if(!current.running)throw new Error('该账号没有正在运行的同步');
-          const next={...current,stopping:true,complete:false,message:'正在停止同步',updatedAt:Date.now()};
+          if(!current.running)throw new Error('该账号当前没有运行中的采集');
+          const next={...current,stopping:true,complete:false,message:'正在停止采集',updatedAt:Date.now()};
           await setMeta(key(account,'sync'),next);return next;
         });
       }
       try{
-        const response=await chrome.tabs.sendMessage(task.tabId,{type:message.type,account,runId:task.runId,...(intervalSeconds===undefined?{}:{intervalSeconds})});
+        const response=await chrome.tabs.sendMessage(task.tabId,{type:message.type,account,runId:task.runId,...(intervalSeconds===undefined?{}:{intervalSeconds,...(activityWindow?{activityWindow}:{})})});
         if(!response?.ok)throw new Error(response?.error||'网页未响应，请刷新 BOSS 聊天页');
         return {...response,runId:task.runId};
       }catch(error: any){

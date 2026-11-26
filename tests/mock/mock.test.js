@@ -299,7 +299,7 @@ test('可重现 HTTP、非 JSON、业务异常及游标停滞', async context =>
 
 test('静态页面、职位路径、错误输入及跨源写入', async context => {
   const client = await clientFor(context);
-  for (const path of ['/web/geek/chat', '/web/geek/jobs', '/job_detail/alpha-normal-job-frontend.html', '/job_detail/alpha-ambiguous_resume-job-fullstack.html']) assert.equal((await client.request(path)).status, 200);
+  for (const path of ['/web/geek/chat', '/web/geek/jobs', '/job_detail/alpha-normal-job-frontend.html', '/job_detail/alpha-ambiguous_resume-job-fullstack.html', '/gongsi/job/mock-company~.html?ka=company-jobs']) assert.equal((await client.request(path)).status, 200);
   const html = await (await client.request('/web/geek/chat')).text();
   const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^\"]+)"/g)].map(match => match[1]);
   assert.ok(assets.some(path => path.endsWith('.js')));
@@ -317,6 +317,7 @@ test('单一扩展同时支持真实站点与本地 mock，mock 账号使用专�
   const manifest = JSON.parse(await readFile(new URL('manifest.json', extension), 'utf8'));
   assert.deepEqual(manifest.host_permissions, ['https://www.zhipin.com/*', 'http://127.0.0.1:4173/*', 'http://localhost:4173/*']);
   assert.ok(manifest.content_scripts.every(script => ['https://www.zhipin.com/web/*', 'http://127.0.0.1:4173/web/*'].every(pattern => script.matches.includes(pattern))));
+  assert.ok(manifest.content_scripts.every(script => ['https://www.zhipin.com', 'http://127.0.0.1:4173', 'http://localhost:4173'].every(origin => script.matches.includes(origin + '/gongsi/job/*.html*'))));
   const main = await readFile(new URL('src/main.ts', extension), 'utf8');
   assert.match(main, /const MOCK_ORIGIN='http:\/\/127\.0\.0\.1:4173';/);
   assert.match(main, /isMock\?'boss:mock:':'boss:'/);

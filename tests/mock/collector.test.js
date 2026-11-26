@@ -6,7 +6,7 @@ import {webcrypto, createHash} from 'node:crypto';
 import {clientFor} from './support/client.js';
 import {inferStatus} from '../../extension/dist/core.js';
 
-async function collect(context, {scenario = 'normal', stopAfterPage = false, switchAfterPage = false, allRows = false} = {}) {
+async function collect(context, {scenario = 'normal', stopAfterPage = false, switchAfterPage = false, allRows = false, activityWindow} = {}) {
   const client = await clientFor(context);
   const source = (await readFile(new URL('../../extension/dist/main.js', import.meta.url), 'utf8'))
     .replace(/const MOCK_ORIGIN\s*=\s*["']http:\/\/127\.0\.0\.1:4173["'];/, 'const MOCK_ORIGIN=' + JSON.stringify(client.origin) + ';');
@@ -55,7 +55,7 @@ async function collect(context, {scenario = 'normal', stopAfterPage = false, swi
   vm.runInNewContext(source, sandbox);
   async function run(commandId, runId) {
     const previous = output.filter(event => event.type === 'SYNC_PROGRESS' && !event.sync.running).length;
-    deliver({type: 'SYNC', commandId, runId, account});
+    deliver({type: 'SYNC', commandId, runId, account, activityWindow});
     const deadline = Date.now() + 4000;
     while (output.filter(event => event.type === 'SYNC_PROGRESS' && !event.sync.running).length === previous) {
       if (Date.now() > deadline) throw new Error('源插件采集没有结束');
@@ -83,6 +83,20 @@ test('原插件 MAIN 脚本通过真实 HTTP 采集三页并保留账号与字�
   assert.ok(!result.delays.includes(3000));
   assert.ok(!result.delays.includes(20000));
   assert.equal((await result.client.json('/__mock/list')).rows[0].unreadCount, 2);
+});
+
+test('模拟 HTTP 历史跨页时只保存所选时间并在下界停止', async context => {
+  const base = Date.UTC(2026, 10, 16, 2);
+  const activityWindow = {start: base + 30 * 60000, end: base + 36 * 60000};
+  const {final, output} = await collect(context, {scenario: 'multipage', activityWindow});
+  const pages = output.filter(event => event.type === 'CONVERSATION');
+  const times = pages.flatMap(page => Array.from(page.messages, message => message.time));
+  assert.equal(final.complete, true);
+  assert.equal(pages.length, 1);
+  assert.equal(pages[0].history.serverReportsEnd, false);
+  assert.equal(times.length, 7);
+  assert.equal(Math.min(...times), activityWindow.start);
+  assert.equal(Math.max(...times), activityWindow.end);
 });
 
 test('原插件采集全部 normal 夹具并保留状态证据和空历史', async context => {

@@ -15,7 +15,7 @@ export function extensionConfig(target: 'pages' | 'content' | 'main'): InlineCon
     build: {outDir, emptyOutDir: false, target: 'chrome120', minify: false},
   };
   if (target === 'pages') {
-    return {...common, build: {...common.build, rolldownOptions: {
+    return {...common, build: {...common.build, assetsInlineLimit: 0, rolldownOptions: {
       input: {dashboard: root + '/dashboard.html', background: root + '/background.ts', core: root + '/core.ts'},
       preserveEntrySignatures: 'strict',
       output: {entryFileNames: '[name].js', chunkFileNames: 'assets/[name]-[hash].js'},

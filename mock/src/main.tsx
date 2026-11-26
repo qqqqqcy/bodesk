@@ -9,7 +9,7 @@ import './styles.css';
 import '../../extension/src/typography.css';
 import '../../extension/content.css';
 
-const bridgeHint = '未检测到扩展。请加载或重新加载项目根目录下的 extension，然后刷新此页。';
+const bridgeHint = '未检测到 BoDesk 扩展，请在扩展管理页加载项目根目录的 extension/ 后刷新此页';
 function App() {
   const [config, setConfig] = useState<MockConfig | null>(null);
   const [scenario, setScenario] = useState('normal');
@@ -32,7 +32,7 @@ function App() {
       if (event.source !== window || event.origin !== location.origin || event.data?.channel !== 'boss-local-helper-v1' || event.data.direction !== 'to-extension') return;
       received = true;
       const data = event.data.data;
-      setBridgeStatus('● 已收到真实扩展页面观察事件');
+      setBridgeStatus('● 已连接 BoDesk 扩展');
       setNotice(previous => previous === bridgeHint ? '' : previous);
       setBridge(previous => [{type: data.type, rows: data.rows?.length, messages: data.messages?.length, sync: data.sync, error: data.error}, ...previous].slice(0, 16));
     };
@@ -54,7 +54,7 @@ function App() {
   }
   return <>
     <header className="topbar"><a className="brand" href="/web/geek/chat">BOSS<span>MOCK / 沟通实验室</span></a><a href="/web/geek/jobs">职位列表</a><a href="/web/geek/recommend?tab=4&sub=1&tag=4">收藏职位</a><span className="local-badge">● 本地模拟环境</span></header>
-    <section className="lab" aria-label="开发场景控制"><label>测试场景<select id="scenario" data-testid="scenario" aria-label="测试场景" value={scenario} onChange={event => {setScenario(event.target.value); void reset(event.target.value, account);}}>{Object.entries(config?.scenarios || {}).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>模拟账号<select id="account" data-testid="account" aria-label="模拟账号" value={account} onChange={event => {setAccount(event.target.value); void reset(scenario, event.target.value);}}>{Object.entries(config?.accounts || {}).map(([value, user]) => <option key={value} value={value}>{user.label}</option>)}</select></label><button id="reset" type="button" disabled={!config} onClick={() => void reset()}>重置当前场景</button><details className="help"><summary>如何联调</summary><p>运行 npm run dev，在扩展管理页加载项目根目录下的 extension，然后刷新页面。右下角浮窗提供职位状态、备注和删除；采集页面提供更新与导出。</p><p>切换场景会重置网页数据并刷新页面；不同场景使用独立的会话与 JD ID，插件会新增一套记录，旧场景记录继续保留。全部姓名、公司与消息均为虚构。</p></details></section>
+    <section className="lab" aria-label="开发场景控制"><label>测试场景<select id="scenario" data-testid="scenario" aria-label="测试场景" value={scenario} onChange={event => {setScenario(event.target.value); void reset(event.target.value, account);}}>{Object.entries(config?.scenarios || {}).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>模拟账号<select id="account" data-testid="account" aria-label="模拟账号" value={account} onChange={event => {setAccount(event.target.value); void reset(scenario, event.target.value);}}>{Object.entries(config?.accounts || {}).map(([value, user]) => <option key={value} value={value}>{user.label}</option>)}</select></label><button id="reset" type="button" disabled={!config} onClick={() => void reset()}>重置当前场景</button><details className="help"><summary>如何联调</summary><p>运行 npm run dev，在扩展管理页加载项目根目录下的 extension，然后刷新页面。右下角浮窗提供职位状态、备注和删除；JD 看板提供采集、筛选与备份导出。</p><p>切换场景会重置网页数据并刷新页面；不同场景使用独立的会话与 JD ID，插件会新增一套记录，旧场景记录继续保留。全部姓名、公司与消息均为虚构。</p></details></section>
     <p id="notice" className="notice" role="status" hidden={!notice}>{notice}</p>
     {config && (location.pathname === '/web/geek/chat' || location.pathname === '/' ? <Chat config={config} notice={setNotice} /> : <Jobs notice={setNotice} />)}
     <p id="bridge-status" className="bridge-status">{bridgeStatus}</p>

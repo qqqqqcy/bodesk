@@ -71,6 +71,14 @@ test('同一份扩展清单中的所有入口都存在，两个内容脚本可�
     }
     for (const path of entry.css || []) assert.ok((await stat(new URL(path, extension))).isFile());
   }
+  for (const icons of [manifest.icons, manifest.action?.default_icon]) {
+    for (const size of ['16', '32', '48', '128']) {
+      assert.equal(typeof icons?.[size], 'string');
+      const bytes = await readFile(new URL(icons[size], extension));
+      assert.deepEqual([...bytes.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
+    }
+  }
+  assert.match(await readFile(new URL('assets/icon.svg', extension), 'utf8'), /<svg\b/);
 });
 
 test('采集页只引用构建包内的模块和样式，符合扩展 CSP', async () => {

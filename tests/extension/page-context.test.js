@@ -49,6 +49,17 @@ test('真实收藏页只读职位收藏列表，忽略推荐与公司收藏，�
   const count=h.output.length;h.elements.delete('[ka="personal_sub_position_focus"].current');await h.snapshot();assert.equal(h.output.length,count);
 });
 
+test('公司收藏页独立观察公司列表与取消收藏',async()=>{
+  const h=harness();h.location.pathname='/web/geek/recommend';
+  h.elements.set('[ka="personal_top_interest"].current',[{}]);h.elements.set('[ka="personal_sub_company_focus"].current',[{}]);
+  const nodes={'a.title':h.textNode('示例公司'),'.company-card-focus':{classList:{contains:()=>true}}};
+  const card={querySelector:selector=>nodes[selector]||null};h.elements.set('.user-jobs-ul .company-card',[card]);
+  const result=await h.snapshot();assert.equal(result.type,'COMPANY_FAVORITES');assert.equal(result.rows[0].companyName,'示例公司');assert.equal(result.rows[0].favorite,true);
+  h.documentEvents.click({target:{closest:selector=>selector==='.company-card-focus.actived'?{closest:()=>card}:null}});
+  h.elements.set('.user-jobs-ul .company-card',[]);
+  const removed=await h.snapshot();assert.equal(removed.rows[0].favorite,false);
+});
+
 test('收藏页首次快照前快速取消也能识别账号并上报取消',async()=>{
   const h=harness();h.location.pathname='/web/geek/recommend';
   h.elements.set('[ka="personal_top_interest"].current',[{}]);h.elements.set('[ka="personal_sub_position_focus"].current',[{}]);
@@ -116,12 +127,36 @@ test('职位列表无Vue数据时从选中卡片链接识别ID，忽略隐藏详
   assert.equal((await h.snapshot()).jobId,'');
 });
 
+test('公司在招职位从招聘页标题和选中卡片识别公司与 JD，不读取聊天',async()=>{
+  const h=harness();h.location.pathname='/gongsi/job/example~.html';
+  h.select({id:'stale-details',company:'其他公司',title:'上一条职位'});
+  h.elements.set('.company-banner .info-primary .name h1',[h.textNode('示例公司招聘')]);
+  h.elements.set('.position-job-list .job-card-box.active',[h.card]);
+  const setLink=(id,title)=>h.card.nodes.set('a.job-name[href*="/job_detail/"]',[{textContent:title,getAttribute:()=>'/job_detail/'+id+'.html?securityId=discard'}]);
+  setLink('first-job','前端工程师');
+  const first=await h.snapshot();
+  assert.equal(first.companyName,'示例公司');assert.equal(first.jobId,'first-job');assert.equal(first.title,'前端工程师');
+  assert.ok(!JSON.stringify(first).includes('securityId'));
+  setLink('other-job','全栈工程师');
+  const other=await h.snapshot();
+  assert.equal(other.jobId,'other-job');assert.equal(other.title,'全栈工程师');
+  h.elements.delete('.position-job-list .job-card-box.active');
+  const company=await h.snapshot();
+  assert.equal(company.companyName,'示例公司');assert.equal(company.jobId,'');assert.equal(company.title,'');
+  assert.equal(h.requests.length,0);
+});
+
 test('独立职位详情页也只提供上下文，网页聊天接口响应不会摄取为对话',async()=>{
   const h=harness();h.select();
   h.location.pathname='/job_detail/j1.html';
   h.elements.set('.job-banner h1',[h.textNode('前端')]);
   h.elements.set('.sider-company .company-info a',[h.textNode(''),h.textNode('示例公司')]);
   const context=await h.snapshot();assert.equal(context.companyName,'示例公司');assert.equal(context.jobId,'j1');
+  assert.equal(context.jobClosed,undefined);
+  h.elements.set('.job-banner .job-status',[h.textNode('职位已关闭')]);
+  assert.equal((await h.snapshot()).jobClosed,true);
+  h.elements.set('.job-banner .job-status',[h.textNode('招聘中')]);
+  assert.equal((await h.snapshot()).jobClosed,false);
   await h.window.fetch(h.location.origin+'/wapi/zpchat/geek/getBossData?bossId=c1');
   await new Promise(resolve=>setTimeout(resolve,20));
   assert.ok(h.output.every(event=>event.type==='PAGE_CONTEXT'));

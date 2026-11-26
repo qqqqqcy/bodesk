@@ -4,12 +4,12 @@ import vm from 'node:vm';
 import {webcrypto,createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 const source=await readFile(new URL('../../extension/dist/main.js',import.meta.url),'utf8');
-function harness({switchOnResponse=false,ack=true,failPage=0,pages=1,empty=false,loaded=true,unreadCount=2,responseFor,clockNow,origin='https://www.zhipin.com'}={}){
+function harness({switchOnResponse=false,ack=true,failPage=0,pages=1,empty=false,loaded=true,unreadCount=2,responseFor,clockNow,rowTime,extraRows=[],origin='https://www.zhipin.com'}={}){
   let uid=7;const output=[],requests=[],times=[];let listener;
   const start=performance.now(),clock=()=>Math.floor((performance.now()-start)*1000);
-  const row={encryptBossId:'boss-test',securityId:'not-persisted-test-value',encryptJobId:'job-test',name:'test',brandName:'Example',unreadCount,lastIsSelf:false};
+  const row={encryptBossId:'boss-test',securityId:'not-persisted-test-value',encryptJobId:'job-test',name:'test',brandName:'Example',unreadCount,lastIsSelf:false,lastTS:rowTime};
   const user={$store:{state:{get userInfo(){return {userId:uid};}}},$options:{name:'App'}};
-  const list={$options:{name:'boss-list'},fullList:empty?[]:[row],bottomText:loaded?'没有更多了':'',isLoading:!loaded};
+  const list={$options:{name:'boss-list'},fullList:empty?[]:[row,...extraRows],bottomText:loaded?'没有更多了':'',isLoading:!loaded};
   const document={documentElement:null,addEventListener(){},querySelector:()=>null,querySelectorAll:selector=>selector==='*'?[{__vue__:user},{__vue__:list}]:[]};
   const window={postMessage:event=>{const d=event.data;output.push(d);if(d.requestId&&(typeof ack==='function'?ack(d):ack)){const ok=d.type!=='CONVERSATION'||d.history.pages!==failPage;setTimeout(()=>reply(d,ok),0);}},addEventListener:(name,fn)=>{if(name==='message')listener=fn;},fetch:async url=>{const u=new URL(url);requests.push(u);times.push(clock());if(switchOnResponse)uid=8;const custom=responseFor?.(u,requests.length);if(custom)return custom;const page=Number(u.searchParams.get('page')); const data=url.includes('getBossData')?{data:{encryptJobId:'job-test'},job:{jobName:'Test JD',brandName:'Example'}}:{hasMore:page<pages,minMsgId:page,messages:[{mid:page,time:1,from:{uid:100},to:{uid:7},body:{text:'hello'},status:2}]};return {ok:true,json:async()=>({code:0,zpData:data})};}};
   function XHR(){} XHR.prototype.open=function(){};XHR.prototype.send=function(){};
@@ -19,7 +19,7 @@ function harness({switchOnResponse=false,ack=true,failPage=0,pages=1,empty=false
   const account=createHash('sha256').update((mock?'boss:mock:':'boss:')+'7').digest('hex').slice(0,24);
   const deliver=data=>listener({source:window,origin,data:{channel:'boss-local-helper-v1',direction:'to-page',data}});
   const reply=(d,ok=true)=>deliver({type:'INGEST_ACK',requestId:d.requestId,account:d.account,runId:d.runId,ok,error:ok?undefined:'模拟写入失败'});
-  const command=(type,id,runId='run-a',intervalSeconds)=>deliver({type,commandId:id,account,runId,intervalSeconds});
+  const command=(type,id,runId='run-a',intervalSeconds,activityWindow)=>deliver({type,commandId:id,account,runId,intervalSeconds,activityWindow});
   return {output,requests,times,command,reply,account};
 }
 async function settled(h){for(let i=0;i<400;i++){if(h.output.some(d=>d.type==='SYNC_PROGRESS'&&!d.sync.running))return;await new Promise(r=>setTimeout(r,5));}throw new Error('sync did not settle');}
@@ -40,6 +40,23 @@ test('历史接口保留系统简历标签及附件请求卡片的内容和消�
   const messages=h.output.find(d=>d.type==='CONVERSATION').messages;
   assert.equal(messages[0].direction,'in');assert.match(messages[0].text,/获取您的附件简历/);
   assert.equal(messages[1].isSystem,true);assert.match(messages[1].text,/简历已发送/);
+});
+
+test('按所选日期跳过较早会话、保留历史范围内的消息，越过起始日期后不再翻页',async()=>{
+  const h=harness({origin:'http://127.0.0.1:4173',rowTime:90,extraRows:[{encryptBossId:'old',lastTS:29}],responseFor:url=>{
+    if(!url.pathname.endsWith('historyMsg'))return null;
+    const page=Number(url.searchParams.get('page'));
+    const times=page===1?[90,80,60]:page===2?[50,30,29]:[20];
+    return {ok:true,json:async()=>({code:0,zpData:{hasMore:true,minMsgId:page,messages:times.map(time=>({mid:time,time,body:{text:'聊天'}}))}})};
+  }});
+  h.command('SYNC','a','run-a',3,{start:30,end:60});
+  await settled(h);
+  assert.deepEqual(h.requests.map(url=>url.searchParams.get('bossId')),['boss-test','boss-test','boss-test']);
+  const records=h.output.filter(data=>data.type==='CONVERSATION');
+  assert.deepEqual(records.flatMap(record=>Array.from(record.messages,message=>message.time)),[60,50,30]);
+  assert.equal(records.at(-1).history.serverReportsEnd,false);
+  const progress=h.output.findLast(data=>data.type==='SYNC_PROGRESS').sync;
+  assert.equal(progress.total,1);assert.equal(progress.complete,true);
 });
 test('account changed during request discards its response instead of assigning it to the old account',async()=>{
   const h=harness({switchOnResponse:true});h.command('SYNC','a');await settled(h);

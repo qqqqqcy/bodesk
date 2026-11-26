@@ -1,7 +1,8 @@
 const alarmName = 'boss-helper-build';
 const revisionKey = 'bossHelper.buildRevision';
-const mockPages = ['http://127.0.0.1:4173', 'http://localhost:4173'].flatMap(origin => [origin + '/web/*', origin + '/job_detail/*']);
-const sitePages = [...mockPages, 'https://www.zhipin.com/web/*', 'https://www.zhipin.com/job_detail/*'];
+const pagePatterns = ['/web/*', '/job_detail/*', '/gongsi/job/*.html*'];
+const mockPages = ['http://127.0.0.1:4173', 'http://localhost:4173'].flatMap(origin => pagePatterns.map(path => origin + path));
+const sitePages = [...mockPages, ...pagePatterns.map(path => 'https://www.zhipin.com' + path)];
 
 export function registerBuildReload(whenIdle: (reload: () => Promise<void>) => Promise<void>) {
   let checking = false;

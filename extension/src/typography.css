@@ -14,3 +14,39 @@
   inline-size: 18px;
   block-size: 18px;
 }
+
+@keyframes bh-spin { to { transform: rotate(1turn); } }
+@keyframes bh-skeleton-breathe { 0%, 100% { opacity: 0.48; } 50% { opacity: 0.88; } }
+
+.bh-spinner {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  animation: bh-spin 850ms linear infinite;
+}
+
+.bh-icon.bh-spin {
+  animation: bh-spin 850ms linear infinite;
+}
+
+.bh-skeleton-list {
+  display: grid;
+  gap: 8px;
+}
+
+.bh-skeleton-bar {
+  display: block;
+  height: 12px;
+  border-radius: 8px;
+  background: #f0f0f0;
+  animation: bh-skeleton-breathe 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bh-spinner,
+  .bh-icon.bh-spin,
+  .bh-skeleton-bar {
+    animation: none;
+  }
+}
