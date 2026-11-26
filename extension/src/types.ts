@@ -35,6 +35,9 @@ export interface ConversationRecord {
 export interface JobRecord extends ExternalRecord {
   autoContributions?: Record<string, Contributions>;
   manualStatus?: string | null;
+  statusAt?: number;
+  statusActivityAt?: number;
+  latestMessage?: TimedHumanMessagePreview;
   conversationIds?: string[];
 }
 
@@ -49,6 +52,12 @@ export interface WidgetContext {
 export interface HumanMessagePreview {
   text: string;
   direction: 'in' | 'out' | 'unknown';
+  receipt?: 'delivered' | 'read';
+}
+
+export interface TimedHumanMessagePreview extends HumanMessagePreview {
+  time: number;
+  fromList?: boolean;
 }
 
 export interface WidgetJob {
@@ -71,6 +80,8 @@ export interface WidgetData {
   companyId?: string;
   companyName?: string;
   companyNote?: string;
+  companyPersisted?: boolean;
+  companyDeleted?: boolean;
   jobs?: WidgetJob[];
 }
 
@@ -90,7 +101,10 @@ export interface DatabaseSnapshot {
   account: string | null;
   accounts: string[];
   conversations: unknown[];
+  jobs: JobRecord[];
+  companies: ExternalRecord[];
   sync: SyncState;
+  syncIntervalSeconds: number;
 }
 
 declare global {

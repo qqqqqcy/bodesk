@@ -1,4 +1,5 @@
 import type {ExternalRecord} from './types.ts';
+import {syncIntervalSeconds} from './sync-interval.ts';
 type Progress = (running: boolean, message: string) => Promise<void>;
 
 (() => {
@@ -69,13 +70,13 @@ type Progress = (running: boolean, message: string) => Promise<void>;
     return {companyName:text(j.brandName||b.companyName,180),jobId:text(b.encryptJobId,150),title:text(j.jobName,200),salary:text(j.salaryDesc,100),location:text(j.locationName,100),experience:text(j.experienceName,100),degree:text(j.degreeName,100),bothTalked:!!b.bothTalked};
   }
   function apiURL(path: string,params: ExternalRecord) {const u=new URL(path,location.origin);for(const [k,v] of Object.entries(params))u.searchParams.set(k,String(v??''));return u.href;}
-  async function get(path: string,params: ExternalRecord,expectedAccount: string,progress: Progress) {
+  async function get(path: string,params: ExternalRecord,expectedAccount: string,progress: Progress,intervalSeconds: number) {
     const signal=runController!.signal;
     // performance.now is monotonic; request and persistence time count toward the interval.
     let now=performance.now();
-    const deadline=isMock?0:Math.max(lastRequest===null?0:lastRequest+3000,cooldownUntil);
+    const deadline=isMock?0:Math.max(lastRequest===null?0:lastRequest+intervalSeconds*1000,cooldownUntil);
     if(now<deadline){
-      await progress(true,now<cooldownUntil?'已完成 20 次主动请求，休息 20 秒；可随时停止':'主动请求间隔至少 3 秒，正在等待；可随时停止');
+      await progress(true,now<cooldownUntil?'已完成 20 次主动请求，休息 20 秒；可随时停止':'主动请求间隔至少 '+intervalSeconds+' 秒，正在等待；可随时停止');
       while((now=performance.now())<deadline)await wait(deadline-now,signal);
     }
     if(signal.aborted)throw new Error('用户已停止');
@@ -177,10 +178,12 @@ type Progress = (running: boolean, message: string) => Promise<void>;
       if(selected&&live.length)post({type:'CONVERSATION',account:a.id,row:cleanRow(selected),messages:live});
     }
   }
-  async function collect(commandId: string,expectedAccount: string,runId: string) {
+  async function collect(commandId: string,expectedAccount: string,runId: string,requestedInterval: unknown) {
     if(syncing){post({type:'COMMAND_RESULT',commandId,ok:false,error:'已有更新正在进行'});return;}
     if(!runId){post({type:'COMMAND_RESULT',commandId,ok:false,error:'缺少同步任务标识'});return;}
     syncing=true;stopped=false;activeRunId=runId;runController=new AbortController();
+    const intervalSeconds=syncIntervalSeconds(requestedInterval);
+    const pacing='主动请求至少间隔 '+intervalSeconds+' 秒，每 20 次休息 20 秒';
     let progress: Progress | undefined,started=false,processed=0,failed=0,incomplete=0;
     try {
       const a=await account();
@@ -191,7 +194,7 @@ type Progress = (running: boolean, message: string) => Promise<void>;
       // A newly opened tab waits before its first request as well, including after switching tabs.
       if(lastRequest===null)lastRequest=performance.now();
       progress=(running,message)=>persist({type:'SYNC_PROGRESS',account:a.id,runId,sync:{running,processed,total:list.rows.length,failed,complete:!running&&!stopped&&!failed&&!incomplete&&list.listEnded,coverage:'网页已加载列表；无法证明账号全量',message,updatedAt:Date.now()}});
-      await progress(true,isMock?'正在读取本地模拟会话，可随时停止':'正在读取已加载会话：主动请求至少间隔 3 秒，每 20 次休息 20 秒，可随时停止');
+      await progress(true,isMock?'正在读取本地模拟会话，可随时停止':'正在读取已加载会话：'+pacing+'，可随时停止');
       started=true;post({type:'COMMAND_RESULT',commandId,ok:true});
       for(const row of list.rows) {
         if(stopped)break;
@@ -199,11 +202,11 @@ type Progress = (running: boolean, message: string) => Promise<void>;
         const base={bossId:row.encryptBossId,securityId:row.securityId};
         const messages=[],seen=new Set(),cursors=new Set();let hasMore=true,cursor=0,pages=0,detail={};
         try {
-          const rawDetail=await get('/wapi/zpchat/geek/getBossData',{...base,bossSource:0},a.id,progress);
+          const rawDetail=await get('/wapi/zpchat/geek/getBossData',{...base,bossSource:0},a.id,progress,intervalSeconds);
           if(!rawDetail.data||typeof rawDetail.data!=='object'||!rawDetail.job||typeof rawDetail.job!=='object')throw new Error('会话详情响应结构异常');
           detail=cleanDetail(rawDetail);
           while(hasMore&&!stopped&&pages<100) {
-            const current=await get('/wapi/zpchat/geek/historyMsg',{...base,maxMsgId:cursor,c:20,page:pages+1,src:0},a.id,progress);
+            const current=await get('/wapi/zpchat/geek/historyMsg',{...base,maxMsgId:cursor,c:20,page:pages+1,src:0},a.id,progress,intervalSeconds);
             if(stopped)break;
             if(!Array.isArray(current?.messages)||typeof current.hasMore!=='boolean')throw new Error('历史响应结构变化');
             for(const message of current.messages){const m=cleanMessage(message,a.uid);if(m.id&&!seen.has(m.id)){seen.add(m.id);messages.push(m);}}
@@ -214,7 +217,7 @@ type Progress = (running: boolean, message: string) => Promise<void>;
           }
           if(hasMore)incomplete++;
         }catch(error: any){if(!stopped)post({type:'SYNC_ERROR',account:a.id,runId,conversationId:String(row.encryptBossId),error:String(error.message).slice(0,250)});throw error;}
-        processed++;await progress(true,isMock?`已处理 ${processed}/${list.rows.length} 个本地模拟会话`:`已处理 ${processed}/${list.rows.length} 个会话；主动请求至少间隔 3 秒，每 20 次休息 20 秒`);
+        processed++;await progress(true,isMock?`已处理 ${processed}/${list.rows.length} 个本地模拟会话`:`已处理 ${processed}/${list.rows.length} 个会话；${pacing}`);
       }
       await progress(false,stopped?'已停止；已保存内容仍在本地':`更新结束：${processed} 个会话，${failed} 个失败，${incomplete} 个历史未读完。范围为网页当前列表。`);
     }catch(error: any){
@@ -256,7 +259,7 @@ type Progress = (running: boolean, message: string) => Promise<void>;
       const p=pendingWrites.get(data.requestId);
       if(p&&p.account===data.account&&p.runId===data.runId){clearTimeout(p.timer);pendingWrites.delete(data.requestId);if(data.ok)p.resolve();else p.reject(new Error(data.error||'本地保存失败'));}
     }
-    if(data.type==='SYNC')collect(data.commandId,data.account,data.runId);
+    if(data.type==='SYNC')collect(data.commandId,data.account,data.runId,data.intervalSeconds);
     if(data.type==='STOP_SYNC'){
       const matches=syncing&&activeRunId===data.runId;
       if(matches){stopped=true;runController?.abort();activeController?.abort();}

@@ -1,342 +1,312 @@
 #boss-local-helper-widget {
-  --bh-surface: #fff;
-  --bh-wash: #f5f6f5;
-  --bh-ink: #202522;
-  --bh-secondary: #434b46;
-  --bh-muted: #59635d;
-  --bh-line: #dce1dd;
-  --bh-control-line: #828d85;
-  --bh-accent: #07664f;
-  --bh-accent-hover: #045541;
-  --bh-selection: #edf5f0;
-  --bh-danger: #97392f;
+  --bh-paper: #fffefa;
+  --bh-wash: #f3f1e9;
+  --bh-ink: #252b26;
+  --bh-muted: #575f57;
+  --bh-line: #deded2;
+  --bh-control: #919b91;
+  --bh-accent: #235d48;
+  --bh-accent-hover: #194634;
+  --bh-active: #edf3ea;
+  --bh-danger: #9e322e;
+  --bh-gutter: 12px;
+  --bh-gap: 8px;
+  --bh-control-height: 32px;
+  --bh-control-radius: 6px;
+  --bh-control-size: 12px;
+  --bh-chevron-size: 6px;
   position: fixed;
-  right: 16px;
-  bottom: 16px;
+  inset: auto 16px 16px auto;
   z-index: 2147483646;
   display: flex;
   flex-direction: column;
-  box-sizing: border-box;
-  width: 376px;
-  max-width: calc(100vw - 32px);
-  max-height: min(612px, calc(100dvh - 32px));
+  width: min(344px, calc(100vw - 32px));
+  max-height: min(560px, calc(100dvh - 32px));
   overflow: hidden;
   isolation: isolate;
   color-scheme: light;
   border: 1px solid var(--bh-line);
-  border-radius: 12px;
-  background: var(--bh-surface);
+  border-radius: 16px;
+  background: var(--bh-paper);
   color: var(--bh-ink);
-  box-shadow: 0 4px 20px rgb(0 0 0 / 14%);
   font: 13px/1.55 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
   font-variant-numeric: tabular-nums;
-  text-align: left;
+  text-align: start;
+
+  &, & *, & *::before, & *::after { box-sizing: border-box; }
+  & [hidden] { display: none !important; }
+  & :is(h2, h3, p) { margin: 0; font: inherit; }
+  & button {
+    margin: 0;
+    min-width: 0;
+    min-height: var(--bh-control-height);
+    padding: 4px var(--bh-gap);
+    border: 1px solid var(--bh-line);
+    border-radius: var(--bh-control-radius);
+    background: var(--bh-paper);
+    color: var(--bh-ink);
+    font: inherit;
+    font-size: var(--bh-control-size);
+    font-weight: 620;
+    line-height: 1.4;
+    cursor: pointer;
+    text-align: center;
+    overflow-wrap: anywhere;
+  }
+  & button:hover:not(:disabled) { background: var(--bh-wash); }
+  & button:disabled { cursor: default; }
+  & button:disabled:not(.bh-job-status, .bh-status-option) { opacity: .52; }
+  & :focus-visible { outline: 2px solid var(--bh-accent); outline-offset: 2px; }
+
+  & .bh-widget-header {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 56px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--bh-line);
+    background: var(--bh-wash);
+  }
+  &:has(.bh-widget-toggle[aria-expanded="false"]) { width: max-content; }
+  &:has(.bh-widget-toggle[aria-expanded="false"]) .bh-widget-header { min-height: 0; padding: 4px 8px; border: 0; }
+  & .bh-widget-drag {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 32px;
+    border-radius: 6px;
+    color: var(--bh-muted);
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+  }
+  & .bh-widget-drag::before {
+    width: 8px;
+    height: 12px;
+    border-inline: 2px dotted currentColor;
+    content: "";
+  }
+  & .bh-widget-drag:active { cursor: grabbing; }
+  & .bh-company {
+    flex: 1;
+    min-width: 0;
+    font-size: 17px;
+    line-height: 1.35;
+    font-weight: 680;
+    overflow-wrap: anywhere;
+  }
+  & .bh-widget-drag:hover, & .bh-widget-toggle:hover:not(:disabled) { background: var(--bh-paper); color: var(--bh-ink); }
+
+  & .bh-widget-body { display: flex; flex-direction: column; min-height: 0; }
+  & .bh-records { min-height: 0; overflow: auto; overscroll-behavior: contain; scroll-padding-block: 12px; }
+  & .bh-jobs { padding: 0 var(--bh-gutter) var(--bh-gap); }
+  & .bh-jobs-heading, & .bh-job-heading-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px 8px;
+  }
+  & .bh-jobs-heading {
+    padding: 12px 0 var(--bh-gap);
+    color: var(--bh-muted);
+    font-size: 12px;
+  }
+  & .bh-jobs-heading h2 { color: var(--bh-ink); font-weight: 640; }
+  & .bh-job {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--bh-gap);
+    padding: var(--bh-gutter);
+    border: 1px solid var(--bh-job-border, var(--bh-line));
+    border-radius: 10px;
+    background: var(--bh-paper);
+  }
+  & .bh-job + .bh-job { margin-top: var(--bh-gap); }
+  & .bh-job.bh-current {
+    --bh-job-border: #cedcce;
+    background: var(--bh-active);
+  }
+  & .bh-heading-actions { display: flex; flex: none; align-items: center; gap: 4px; }
+  & .bh-icon-button {
+    display: grid;
+    flex: none;
+    place-items: center;
+    inline-size: var(--bh-control-height);
+    padding: 0;
+    border-color: transparent;
+    background: transparent;
+    color: var(--bh-muted);
+  }
+  & .bh-icon-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  & .bh-icon-button[data-active="true"] { background: var(--bh-wash); color: var(--bh-accent); }
+  & .bh-favorite { flex: none; color: var(--bh-muted); font-size: 12px; }
+  & .bh-job-heading { min-width: 0; font-size: 15px; font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
+  & a.bh-job-title { color: inherit; text-decoration: underline; text-decoration-color: var(--bh-control); text-underline-offset: 3px; }
+  & a.bh-job-title:hover { color: var(--bh-accent); text-decoration-color: currentColor; }
+  & .bh-job-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--bh-gap);
+    color: var(--bh-accent);
+    text-align: start;
+  }
+  & .bh-job-status:not(:disabled) {
+    padding-inline-end: calc(var(--bh-gap) + (var(--bh-control-height) - var(--bh-chevron-size)) / 2);
+  }
+  & .bh-job-status[aria-expanded="true"] { border-color: var(--bh-control); background: var(--bh-wash); }
+  & :is(.bh-job-status:not(:disabled), .bh-message-toggle, .bh-widget-toggle)::after {
+    flex: none;
+    width: var(--bh-chevron-size);
+    height: var(--bh-chevron-size);
+    border: solid currentColor;
+    border-width: 0 1.5px 1.5px 0;
+    transform: translateY(-1px) rotate(45deg);
+    content: "";
+  }
+  & :is(.bh-job-status, .bh-message-toggle)[aria-expanded="true"]::after, & .bh-widget-toggle[aria-expanded="false"]::after {
+    transform: translateY(1px) rotate(225deg);
+  }
+
+  & .bh-status-picker {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--bh-gap);
+  }
+  & .bh-status-option { text-align: start; }
+  & .bh-status-option:disabled { background: var(--bh-active); color: var(--bh-accent); }
+  & .bh-status-option span { margin-inline-start: 4px; white-space: nowrap; }
+  & .bh-layer {
+    position: fixed;
+    z-index: 1;
+    inset: auto 16px 16px auto;
+    width: min(376px, calc(100vw - 32px));
+    max-height: min(480px, calc(100dvh - 32px));
+    margin: 0;
+    padding: 16px;
+    overflow: auto;
+    overscroll-behavior: contain;
+    border: 1px solid var(--bh-line);
+    border-radius: 12px;
+    background: var(--bh-paper);
+    color: var(--bh-ink);
+    font: inherit;
+    font-size: 14px;
+    overflow-wrap: anywhere;
+  }
+  & dialog.bh-layer { inset: 0; margin: auto; height: max-content; }
+  & dialog.bh-layer::backdrop { background: rgb(29 36 32 / 42%); }
+  & .bh-layer h3 { font-size: 16px; font-weight: 680; }
+  & .bh-layer p { margin-block: var(--bh-gap); color: var(--bh-muted); }
+  & .bh-layer .bh-layer-subtitle { font-size: 12px; }
+  & .bh-layer .bh-status-error { color: var(--bh-danger); }
+  & .bh-layer .bh-editor-actions, & .bh-layer-close, & .bh-layer .bh-note-input { margin-top: var(--bh-gap); }
+  & .bh-layer-close { width: 100%; }
+  & .bh-confirm-delete { color: var(--bh-danger); }
+
+  & :is(.bh-message-preview, :where(.bh-job, .bh-company-notes) > .bh-note-text, .bh-note-history, .bh-note-input) {
+    border: 1px solid var(--bh-line);
+    border-radius: var(--bh-control-radius);
+    background: var(--bh-paper);
+  }
+  & .bh-message-preview {
+    --bh-message-line: 20px;
+    display: grid;
+    grid-template-columns: 4ch minmax(0, 1fr);
+    align-items: start;
+    gap: var(--bh-gap);
+    padding: var(--bh-gap);
+    line-height: var(--bh-message-line);
+  }
+  & .bh-message-sender { color: var(--bh-muted); font-weight: 650; white-space: nowrap; }
+  & .bh-message-preview:has(.bh-message-toggle) {
+    grid-template-columns: 4ch minmax(0, 1fr) var(--bh-control-height);
+  }
+  & .bh-message-in .bh-message-sender { color: var(--bh-accent); }
+  & .bh-message-body[data-expanded="false"] { max-height: calc(2 * var(--bh-message-line)); overflow: hidden; }
+  & .bh-message-text { display: block; overflow-wrap: anywhere; white-space: pre-wrap; }
+  & .bh-message-preview > .message-receipt {
+    grid-column: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-self: start;
+    gap: 3px;
+    color: var(--bh-muted);
+    white-space: nowrap;
+  }
+  & .bh-message-preview > .message-receipt[data-receipt="read"] { color: var(--bh-accent); }
+  & .bh-message-preview > .message-receipt svg { width: 1em; height: 1em; flex: none; }
+  & .bh-message-toggle {
+    align-self: center;
+    color: var(--bh-accent);
+  }
+
+  & .bh-company-notes {
+    flex: none;
+    max-height: min(216px, 32dvh);
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: var(--bh-gap) var(--bh-gutter) 0;
+  }
+  & .bh-editor-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--bh-gap);
+  }
+  & :is(.bh-company-note-edit, .bh-job-note-edit) { color: var(--bh-accent); }
+  & :is(.bh-job-delete, .bh-company-delete):hover:not(:disabled) { color: var(--bh-danger); }
+  & .bh-note-text { max-height: 7em; overflow: auto; color: var(--bh-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+  & :is(.bh-job, .bh-company-notes) > .bh-note-text, & .bh-note-history { padding: var(--bh-gap); }
+  & .bh-note-history { color: var(--bh-muted); font-size: 12px; }
+  & .bh-note-history summary { cursor: pointer; }
+  & .bh-note-history .bh-note-text { margin-top: 4px; }
+  & :is(.bh-notice, .bh-empty) { padding: 8px 16px; color: var(--bh-muted); overflow-wrap: anywhere; }
+  & .bh-empty { padding-block: 16px; }
+
+  & .bh-controls { display: flex; flex: none; gap: 8px; padding: 4px 12px; border-top: 1px solid var(--bh-line); background: var(--bh-wash); }
+  & .bh-overview {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex: 1;
+    gap: 4px;
+    white-space: nowrap;
+    border-color: transparent;
+    background: transparent;
+    color: var(--bh-accent);
+  }
+  & .bh-overview::after { content: "↗"; font-size: 16px; line-height: 1; }
+  & .bh-overview:hover:not(:disabled) { background: var(--bh-paper); }
+
+  & .bh-editor { min-width: 0; }
+  & .bh-note-input {
+    width: 100%;
+    min-width: 0;
+    min-height: 64px;
+    resize: vertical;
+    padding: var(--bh-gap);
+    border-color: var(--bh-control);
+    color: var(--bh-ink);
+    font: inherit;
+    font-size: var(--bh-input-size, 13px);
+  }
+  & .bh-editor-feedback { margin-bottom: 8px; color: var(--bh-muted); overflow-wrap: anywhere; }
+  & .bh-save { border-color: var(--bh-accent); background: var(--bh-accent); color: #fff; }
+  & .bh-save:hover:not(:disabled) { background: var(--bh-accent-hover); }
 }
-
-#boss-local-helper-widget *, #boss-local-helper-widget *::before, #boss-local-helper-widget *::after { box-sizing: border-box; }
-#boss-local-helper-widget [hidden] { display: none !important; }
-
-#boss-local-helper-widget .bh-widget-header {
-  display: flex;
-  flex: none;
-  align-items: flex-start;
-  gap: 4px;
-  padding: 12px;
-  border-bottom: 1px solid var(--bh-line);
-  background: var(--bh-surface);
-}
-
-#boss-local-helper-widget:has(.bh-widget-toggle[aria-expanded="false"]) { width: auto; }
-#boss-local-helper-widget .bh-widget-header:has(.bh-widget-toggle[aria-expanded="false"]) { padding: 4px; border: 0; }
-
-#boss-local-helper-widget .bh-widget-drag {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 24px;
-  height: 32px;
-  border-radius: 8px;
-  color: var(--bh-muted);
-  cursor: grab;
-  touch-action: none;
-  user-select: none;
-}
-
-#boss-local-helper-widget .bh-widget-drag::before {
-  width: 8px;
-  height: 12px;
-  border-inline: 2px dotted currentColor;
-  content: "";
-}
-
-#boss-local-helper-widget .bh-widget-drag:hover { background: var(--bh-wash); }
-#boss-local-helper-widget .bh-widget-drag:active { cursor: grabbing; }
-
-#boss-local-helper-widget .bh-company {
-  flex: 1;
-  margin: 0;
-  padding-block: 4px;
-  min-width: 0;
-  color: var(--bh-ink);
-  font: inherit;
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-#boss-local-helper-widget .bh-widget-body { display: flex; flex-direction: column; min-height: 0; }
-#boss-local-helper-widget .bh-records { min-height: 0; overflow: auto; overscroll-behavior: contain; }
-#boss-local-helper-widget .bh-company-notes { padding: 4px 16px 8px; border-bottom: 1px solid var(--bh-line); background: var(--bh-wash); }
-#boss-local-helper-widget .bh-company-note-heading, #boss-local-helper-widget .bh-job-heading-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-#boss-local-helper-widget .bh-record-label { color: var(--bh-muted); font-size: 12px; }
-#boss-local-helper-widget .bh-company-notes > .bh-note-text { margin: 0; }
-#boss-local-helper-widget .bh-jobs { padding: 0 12px 4px; }
-
-#boss-local-helper-widget .bh-jobs-heading {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 12px 4px 8px;
-  color: var(--bh-muted);
-  font-size: 12px;
-}
-
-#boss-local-helper-widget .bh-jobs-heading h2 { margin: 0; color: var(--bh-secondary); font: inherit; font-weight: 600; }
-
-#boss-local-helper-widget .bh-job {
-  padding: 12px 8px 8px;
-  border-bottom: 1px solid var(--bh-line);
-}
-
-#boss-local-helper-widget .bh-job:last-child { border-bottom-color: transparent; }
-#boss-local-helper-widget .bh-job.bh-current {
-  padding-inline: 12px;
-  border: 1px solid var(--bh-line);
-  border-inline-start: 2px solid var(--bh-accent);
-  border-radius: 8px;
-  background: var(--bh-selection);
-}
-#boss-local-helper-widget .bh-current-label { display: block; margin-bottom: 4px; color: var(--bh-accent); font-size: 12px; font-weight: 600; }
-#boss-local-helper-widget .bh-job-heading { margin: 0; color: var(--bh-ink); font: inherit; font-size: 14px; font-weight: 550; overflow-wrap: anywhere; }
-#boss-local-helper-widget .bh-current .bh-job-heading { font-size: 16px; font-weight: 600; }
-#boss-local-helper-widget a.bh-job-title { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
-#boss-local-helper-widget a.bh-job-title:hover { color: var(--bh-accent); }
-
-#boss-local-helper-widget button {
-  margin: 0;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-#boss-local-helper-widget button:disabled { cursor: default; }
-#boss-local-helper-widget button:disabled:not(.bh-job-status) { opacity: .55; }
-
-#boss-local-helper-widget .bh-widget-toggle, #boss-local-helper-widget .bh-overview,
-#boss-local-helper-widget .bh-save, #boss-local-helper-widget .bh-cancel {
-  min-height: 32px;
-  padding: 4px 8px;
-  border: 1px solid var(--bh-control-line);
-  border-radius: 8px;
-  background: var(--bh-surface);
-  color: var(--bh-secondary);
-  font-weight: 550;
-}
-
-#boss-local-helper-widget .bh-widget-toggle { flex: none; border-color: transparent; white-space: nowrap; }
-#boss-local-helper-widget .bh-widget-toggle:hover, #boss-local-helper-widget .bh-overview:hover,
-#boss-local-helper-widget .bh-cancel:hover:not(:disabled) { background: var(--bh-wash); }
-
-#boss-local-helper-widget .bh-job-line, #boss-local-helper-widget .bh-job-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 8px;
-  margin-top: 8px;
-}
-
-#boss-local-helper-widget .bh-job-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  max-width: 100%;
-  min-height: 28px;
-  padding: 2px 8px;
-  border: 1px solid var(--bh-control-line);
-  border-radius: 6px;
-  background: var(--bh-surface);
-  color: var(--bh-secondary);
-  font-size: 12px;
-  font-weight: 550;
-  text-align: left;
-  overflow-wrap: anywhere;
-}
-
-#boss-local-helper-widget .bh-job-status:not(:disabled)::after {
-  flex: none;
-  width: 5px;
-  height: 5px;
-  border-right: 1px solid currentColor;
-  border-bottom: 1px solid currentColor;
-  transform: translateY(-1px) rotate(45deg);
-  content: "";
-}
-#boss-local-helper-widget .bh-job-status[aria-expanded="true"]::after { transform: translateY(1px) rotate(225deg); }
-#boss-local-helper-widget .bh-job-status:disabled { padding-inline: 0; border-color: transparent; background: transparent; }
-#boss-local-helper-widget .bh-job-status:hover:not(:disabled),
-#boss-local-helper-widget .bh-job-status[aria-expanded="true"] { border-color: var(--bh-accent); color: var(--bh-accent); }
-#boss-local-helper-widget .bh-favorite { flex: none; color: var(--bh-muted); font-size: 12px; }
-
-#boss-local-helper-widget .bh-status-picker {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px;
-  margin-top: 8px;
-  padding: 4px;
-  border: 1px solid var(--bh-line);
-  border-radius: 8px;
-  background: var(--bh-surface);
-}
-
-#boss-local-helper-widget .bh-status-option {
-  min-height: 32px;
-  padding: 4px 8px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--bh-ink);
-  font-size: 12px;
-  text-align: left;
-  overflow-wrap: anywhere;
-}
-
-#boss-local-helper-widget .bh-status-option:hover:not(:disabled),
-#boss-local-helper-widget button.bh-status-option:disabled { background: var(--bh-wash); color: var(--bh-accent); opacity: 1; }
-#boss-local-helper-widget .bh-status-option span { margin-inline-start: 4px; font-size: 12px; white-space: nowrap; }
-
-#boss-local-helper-widget .bh-status-dialog {
-  width: min(360px, calc(100vw - 32px));
-  max-height: calc(100dvh - 32px);
-  margin: auto;
-  padding: 16px;
-  border: 1px solid var(--bh-line);
-  border-radius: 12px;
-  background: var(--bh-surface);
-  color: var(--bh-ink);
-  box-shadow: 0 4px 16px rgb(0 0 0 / 16%);
-  font: inherit;
-  overflow-wrap: anywhere;
-}
-
-#boss-local-helper-widget .bh-status-dialog::backdrop { background: rgb(0 0 0 / 40%); }
-#boss-local-helper-widget .bh-status-dialog h3 { margin: 0; color: inherit; font: inherit; font-size: 16px; font-weight: 600; }
-#boss-local-helper-widget .bh-status-dialog p { margin: 8px 0 0; }
-#boss-local-helper-widget .bh-status-dialog .bh-status-error { color: var(--bh-danger); }
-#boss-local-helper-widget .bh-status-dialog .bh-editor-actions { justify-content: flex-end; margin-top: 16px; }
-
-#boss-local-helper-widget .bh-link-button {
-  min-height: 32px;
-  padding: 4px 0;
-  border: 0;
-  background: transparent;
-  color: var(--bh-secondary);
-  font-size: 12px;
-  white-space: nowrap;
-  text-underline-offset: 3px;
-}
-
-#boss-local-helper-widget .bh-link-button:hover:not(:disabled),
-#boss-local-helper-widget .bh-link-button:focus-visible { text-decoration: underline; }
-#boss-local-helper-widget .bh-company-note-edit, #boss-local-helper-widget .bh-job-note-edit { color: var(--bh-accent); font-weight: 550; }
-#boss-local-helper-widget .bh-job-delete { margin-inline-start: auto; color: var(--bh-muted); }
-#boss-local-helper-widget .bh-job-delete:hover:not(:disabled), #boss-local-helper-widget .bh-job-delete:focus-visible { color: var(--bh-danger); }
-
-#boss-local-helper-widget .bh-message-preview {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  gap: 8px;
-  margin-top: 8px;
-  padding: 8px;
-  border: 1px solid var(--bh-line);
-  border-radius: 6px;
-  background: var(--bh-wash);
-  color: var(--bh-secondary);
-  font-size: 12px;
-}
-
-#boss-local-helper-widget .bh-message-sender { color: var(--bh-muted); font-weight: 550; white-space: nowrap; }
-#boss-local-helper-widget .bh-message-out .bh-message-sender { color: var(--bh-secondary); }
-#boss-local-helper-widget .bh-current .bh-message-preview { background: var(--bh-surface); }
-#boss-local-helper-widget .bh-message-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-#boss-local-helper-widget .bh-message-preview:is(:hover, :focus) .bh-message-text {
-  max-height: 8em;
-  overflow: auto;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-  overscroll-behavior: contain;
-}
-
-#boss-local-helper-widget .bh-note-text, #boss-local-helper-widget .bh-notice,
-#boss-local-helper-widget .bh-editor-feedback, #boss-local-helper-widget .bh-note-history summary {
-  margin: 8px 0;
-  color: var(--bh-muted);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-
-#boss-local-helper-widget .bh-note-text { max-height: 6em; overflow: auto; white-space: pre-wrap; }
-#boss-local-helper-widget .bh-notice { margin: 8px 12px; }
-#boss-local-helper-widget .bh-note-history summary { cursor: pointer; }
-#boss-local-helper-widget .bh-controls { display: flex; justify-content: flex-end; flex: none; padding: 8px 12px; border-top: 1px solid var(--bh-line); background: var(--bh-surface); }
-#boss-local-helper-widget .bh-records:not(:has(.bh-jobs, .bh-company-notes, .bh-notice:not([hidden]))) + .bh-controls { border-top: 0; }
-
-#boss-local-helper-widget .bh-editor {
-  margin: 8px 0 4px;
-  padding: 8px;
-  border: 1px solid var(--bh-line);
-  border-radius: 8px;
-  background: var(--bh-surface);
-}
-
-#boss-local-helper-widget .bh-field {
-  display: grid;
-  gap: 4px;
-  margin-bottom: 8px;
-  color: var(--bh-muted);
-  font-size: 12px;
-}
-
-#boss-local-helper-widget textarea {
-  width: 100%;
-  min-width: 0;
-  padding: 8px;
-  border: 1px solid var(--bh-control-line);
-  border-radius: 8px;
-  background: var(--bh-surface);
-  color: var(--bh-ink);
-  font: inherit;
-  font-size: 13px;
-}
-
-#boss-local-helper-widget textarea { min-height: 60px; resize: vertical; }
-#boss-local-helper-widget .bh-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-#boss-local-helper-widget .bh-save { border-color: var(--bh-accent); background: var(--bh-accent); color: #fff; }
-#boss-local-helper-widget .bh-save:hover:not(:disabled) { border-color: var(--bh-accent-hover); background: var(--bh-accent-hover); }
-#boss-local-helper-widget :focus-visible { outline: 2px solid var(--bh-accent); outline-offset: 2px; }
 
 @media (max-width: 650px) {
   #boss-local-helper-widget {
     right: 8px;
     bottom: 8px;
-    max-width: calc(100vw - 16px);
-    max-height: min(520px, 68dvh);
+    width: min(344px, calc(100vw - 16px));
+    max-height: min(520px, 70dvh);
   }
+  #boss-local-helper-widget div.bh-layer { inset-inline-end: 8px; inset-block-end: 8px; }
+}
+
+@media (pointer: coarse) {
+  #boss-local-helper-widget { --bh-control-height: 40px; --bh-input-size: 16px; }
 }

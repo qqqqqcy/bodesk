@@ -19,7 +19,7 @@ function harness({switchOnResponse=false,ack=true,failPage=0,pages=1,empty=false
   const account=createHash('sha256').update((mock?'boss:mock:':'boss:')+'7').digest('hex').slice(0,24);
   const deliver=data=>listener({source:window,origin,data:{channel:'boss-local-helper-v1',direction:'to-page',data}});
   const reply=(d,ok=true)=>deliver({type:'INGEST_ACK',requestId:d.requestId,account:d.account,runId:d.runId,ok,error:ok?undefined:'模拟写入失败'});
-  const command=(type,id,runId='run-a')=>deliver({type,commandId:id,account,runId});
+  const command=(type,id,runId='run-a',intervalSeconds)=>deliver({type,commandId:id,account,runId,intervalSeconds});
   return {output,requests,times,command,reply,account};
 }
 async function settled(h){for(let i=0;i<400;i++){if(h.output.some(d=>d.type==='SYNC_PROGRESS'&&!d.sync.running))return;await new Promise(r=>setTimeout(r,5));}throw new Error('sync did not settle');}
@@ -102,7 +102,7 @@ test('精确匹配 mock 地址时使用专用账号并跳过请求间隔和周�
   const real=harness();
   assert.notEqual(mock.account,real.account);
   assert.equal(localhost.account,mock.account);
-  mock.command('SYNC','mock');await settled(mock);
+  mock.command('SYNC','mock','run-a',30);await settled(mock);
   assert.equal(mock.requests.length,22);
   assert.equal(mock.output.findLast(d=>d.type==='SYNC_PROGRESS').sync.complete,true);
   assert.ok(mock.output.filter(d=>d.type==='CONVERSATION').every(d=>d.account===mock.account));
@@ -114,6 +114,18 @@ test('精确匹配 mock 地址时使用专用账号并跳过请求间隔和周�
   other.command('SYNC','other');await settled(other);
   assert.equal(other.account,real.account);
   assert.ok(other.times[0]>=3000);
+});
+
+test('真实地址按设置等待，低于下限的值回退到三秒',async()=>{
+  for(const [requested,seconds] of [[8,8],[1,1],[0,3]]){
+    const h=harness({pages:2});
+    h.command('SYNC','a','run-a',requested);
+    await settled(h);
+    assert.equal(h.requests.length,3);
+    assert.ok(h.times[0]>=seconds*1000);
+    for(let index=1;index<h.times.length;index++)assert.ok(h.times[index]-h.times[index-1]>=seconds*1000-100);
+    assert.ok(h.output.some(event=>event.type==='SYNC_PROGRESS'&&event.sync.message.includes('主动请求至少间隔 '+seconds+' 秒')));
+  }
 });
 
 test('mock 收到 429 后仍停止当次采集，但可立即手动重试',async()=>{

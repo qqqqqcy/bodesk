@@ -86,6 +86,34 @@ test('绑定当前账号的站点浮窗可删除卡片，其他标签和账号�
   assert.equal((await h.get(A)).jobs.length,0);assert.equal((await h.get(A)).conversations.length,1);
 });
 
+test('删除公司保留聊天和其他公司的职位，后续观察不会重新收录',async()=>{
+  const h=await harness();
+  const companyId=A+':company:模拟公司';
+  const sameCompany=[row('c1','j1'),row('c2','j2')];
+  const otherJob=row('c3','j3',{companyName:'其他公司'});
+  await h.ingest(snapshot(A,[...sameCompany,otherJob]));
+  const site={url:'https://www.zhipin.com/web/geek/chat',tab:{id:1}};
+  const mock={url:'http://127.0.0.1:4173/web/geek/chat',tab:{id:2}};
+  await h.ingest(snapshot(B,sameCompany),mock);
+  await h.ingest({type:'CONVERSATION',account:A,row:sameCompany[0],messages:[{id:'chat1',time:10,text:'之前的聊天',direction:'in'}]});
+  assert.equal((await h.send({type:'SAVE_COMPANY_NOTE',account:A,companyId,note:'公司备注'})).ok,true);
+  const deletion={type:'DELETE_COMPANY',account:A,companyId,expectedNote:'公司备注'};
+  assert.equal((await h.send(deletion,mock)).ok,false);
+  assert.equal((await h.send({...deletion,expectedNote:''},site)).ok,false);
+  assert.equal((await h.send(deletion,site)).ok,true);
+  await h.ingest(snapshot(A,[...sameCompany,row('c4','new-job')]));
+  await h.ingest({type:'FAVORITES',account:A,rows:[{jobId:'new-favorite',title:'新收藏',companyName:'模拟公司',favorite:true}]});
+  const result=(await h.send({type:'EXPORT',account:A})).data;
+  assert.deepEqual(result.jobs.map(job=>job.id),[A+':job:j3']);
+  assert.deepEqual(result.companies.map(company=>company.name),['其他公司']);
+  assert.equal(result.conversations.length,4);
+  assert.equal(result.messages[0].text,'之前的聊天');
+  assert.equal((await h.get(B)).jobs.length,2);
+  const widget=await h.send({type:'WIDGET_GET',account:A,jobId:'new-job',companyName:'模拟公司',title:'新职位'},site);
+  assert.equal(widget.data.companyDeleted,true);
+  assert.deepEqual(widget.data.jobs,[]);
+});
+
 test('删除事务失败时不会丢失JD、备注、对话或事件',async()=>{
   const h=await harness(),jobId=A+':job:j1';await h.ingest(snapshot(A,[row('c1','j1')]));
   await h.send({type:'SAVE_JOB',account:A,jobId,note:'必须保留',status:'interviewing'});
@@ -270,11 +298,17 @@ test('浮窗打开总视图时使用当前页面账号及窗口，不改变默�
   assert.equal((await h.send({type:'OPEN_DASHBOARD'},mock)).ok,true);
   assert.equal(h.created.at(-1).url,'chrome-extension://test/dist/dashboard.html?account='+A);
   assert.equal(h.created.at(-1).windowId,7);
+  assert.equal((await h.send({type:'OPEN_DASHBOARD',view:'board'},mock)).ok,true);
+  assert.deepEqual(h.created.at(-1),{url:'chrome-extension://test/dist/dashboard.html?account='+A+'#board',windowId:7});
+  await h.handlers.action(mock.tab);
+  assert.deepEqual(h.created.at(-1),{url:'chrome-extension://test/dist/dashboard.html?account='+A+'#board',windowId:7});
+  await h.handlers.action({id:9,windowId:7});
+  assert.deepEqual(h.created.at(-1),{url:'chrome-extension://test/dist/dashboard.html#board',windowId:7});
   assert.equal((await h.get()).account,B);
   const unknown={url:'http://127.0.0.1:4173/web/geek/chat',tab:{id:6}};
   const result=await h.send({type:'OPEN_DASHBOARD'},unknown);
   assert.equal(result.ok,false);assert.match(result.error,/账号尚未识别/);
-  assert.equal(h.created.length,1);
+  assert.equal(h.created.length,4);
   assert.equal((await h.send({type:'OPEN_DASHBOARD',account:A},{...unknown,tab:{id:6,windowId:8}})).ok,false);
   await h.bind(A,unknown);
   assert.equal((await h.send({type:'OPEN_DASHBOARD',account:A},{...unknown,tab:{id:6,windowId:8}})).ok,true);
@@ -314,7 +348,7 @@ test('WIDGET_GET 按已知职位返回同公司职位并隔离账号',async()=>{
   await h.bind(A,site);
   const result=await h.send({type:'WIDGET_GET',account:A,jobId:'j2',companyName:'错误公司',title:'页面标题'},site);
   result.data.jobs=result.data.jobs.map(({url,favorite,updatedAt,...job})=>{assert.equal(favorite,false);assert.equal(typeof updatedAt,'number');assert.equal(url,'https://www.zhipin.com/job_detail/'+job.id.split(':job:')[1]+'.html');return job;});
-  assert.deepEqual(result,{ok:true,data:{companyId:`${A}:company:模拟公司`,companyName:'模拟公司',companyNote:'',settings:{},jobs:[
+  assert.deepEqual(result,{ok:true,data:{companyId:`${A}:company:模拟公司`,companyName:'模拟公司',companyNote:'',companyPersisted:true,settings:{},jobs:[
     {id:`${A}:job:j1`,title:'职位 j1',status:'unknown',label:'未知',manual:false,current:false,note:'',persisted:true,firstConversationAt:0},
     {id:`${A}:job:j2`,title:'职位 j2',status:'interviewing',label:'未知',manual:true,current:true,note:'',persisted:true,firstConversationAt:0}
   ],currentJobId:`${A}:job:j2`}});
@@ -348,7 +382,7 @@ test('WIDGET_GET 未知职位为临时行，标题匹配仅在唯一时高亮',a
   assert.equal(missing.data.companyName,'新公司');assert.equal(missing.data.jobs.length,1);
 });
 
-test('职位页预览只返回已有JD，重复浏览新职位新公司不写入记录或计数',async()=>{
+test('职位详情预览提供可编辑的临时 JD，显式保存才创建本地记录',async()=>{
   const h=await harness(),site={url:'https://www.zhipin.com/web/geek/jobs',tab:{id:3}};
   await h.ingest(snapshot(A,[row('c1','j1',{jobTitle:'前端'}),row('c2','j2',{jobTitle:'后端'})]));
   await h.bind(A,site);
@@ -358,12 +392,27 @@ test('职位页预览只返回已有JD，重复浏览新职位新公司不写入
     assert.equal((await h.send({type:'INGEST',data:context},site)).ok,true);
     const result=await h.send({type:'WIDGET_GET',account:A,jobId,companyName,title,preview:true},site);
     assert.equal(result.ok,true,result.error);
-    assert.ok(result.data.jobs.every(job=>job.persisted));
-    assert.equal(result.data.jobs.length,companyName==='新公司'?0:2);
-    assert.equal(result.data.jobs.filter(job=>job.current).length,jobId==='j1'?1:0);
-    assert.equal(result.data.currentJobId,jobId==='j1'?A+':job:j1':null);
+    assert.equal(result.data.jobs.length,companyName==='新公司'?1:jobId==='j1'?2:3);
+    assert.equal(result.data.jobs.filter(job=>job.current).length,1);
+    assert.equal(result.data.currentJobId,A+':job:'+jobId);
+    assert.equal(result.data.jobs.find(job=>job.current).persisted,jobId==='j1');
   }
   assert.deepEqual(await h.get(A),before);
+  const details={url:'https://www.zhipin.com/job_detail/new-company-job.html',tab:{id:4}};
+  await h.bind(A,details);
+  const jobId='new-company-job',companyName='新公司',title='新职位';
+  const preview=await h.send({type:'WIDGET_GET',account:A,jobId,companyName,title,preview:true},details);
+  const companyId=preview.data.companyId;
+  assert.equal((await h.send({type:'SAVE_COMPANY_NOTE',account:A,companyId,companyName,note:'详情公司备注',expectedNote:''},details)).ok,true);
+  assert.equal((await h.get(A)).jobs.length,before.jobs.length);
+  assert.equal((await h.send({type:'SAVE_JOB',account:A,jobId:A+':job:'+jobId,note:'详情 JD 备注',expectedNote:'',status:'passed',expectedManualStatus:null,
+    context:{companyId,companyName,title,preview:true}},details)).ok,true);
+  const saved=await h.get(A);
+  const added=saved.jobs.find(job=>job.id===A+':job:'+jobId);
+  assert.equal(added.note,'详情 JD 备注');
+  assert.equal(added.manualStatus,'passed');
+  assert.equal(saved.companies.find(company=>company.id===companyId).note,'详情公司备注');
+  assert.equal(saved.conversations.length,before.conversations.length);
 });
 
 test('独立职位详情补全同 ID 的已有占位标题，保留状态和备注',async()=>{
@@ -413,6 +462,37 @@ test('现有已采集面试卡片回填自动状态，保留手动状态和备�
   assert.equal(automatic.manual,false);
 });
 
+test('看板使用产生状态的消息或人工操作时间，重复采集和修改备注不会重置', async () => {
+  const h = await harness();
+  const jobId = A + ':job:interview';
+  const inviteAt = Date.UTC(2026, 9, 18, 10, 30);
+  const acceptedAt = inviteAt + 60000;
+  const invite = {id:'1',time:inviteAt,text:'模拟招聘方邀请您线上面试',type:3,bodyType:14,templateId:1,direction:'in'};
+  const accepted = {id:'2',time:acceptedAt,text:'接受了面试邀请',type:3,bodyType:14,templateId:1,direction:'out'};
+  const collect = messages => h.ingest({type:'CONVERSATION',account:A,row:row('candidate','interview'),messages});
+  const current = async () => (await h.get(A)).jobs.find(job => job.id === jobId);
+  const save = patch => h.send({type:'SAVE_JOB',account:A,jobId,...patch});
+
+  await collect([invite]);
+  assert.equal((await current()).statusAt, inviteAt);
+  assert.equal((await save({status:'interviewing'})).ok, true);
+  const manualAt = (await h.get(A)).events.find(event => event.source === 'manual').time;
+  assert.equal((await current()).statusAt, manualAt);
+  await collect([invite, accepted]);
+  assert.equal((await save({note:'跟进面试'})).ok, true);
+  assert.equal((await current()).statusAt, manualAt);
+  assert.equal((await save({status:'auto'})).ok, true);
+  await collect([invite, accepted]);
+  assert.equal((await current()).statusAt, acceptedAt);
+  const restoredAt = (await h.get(A)).events.find(event => event.evidence === '恢复自动状态').time;
+  assert.equal((await current()).statusActivityAt, restoredAt);
+
+  await h.ingest(snapshot(A,[row('unknown','undated')]));
+  const undated = (await h.get(A)).jobs.find(job => job.id.endsWith(':undated'));
+  assert.ok(undated.updatedAt > 0);
+  assert.equal(undated.statusAt, undefined);
+});
+
 test('浮窗为每个职位选择最近的人工消息，并区分发送方', async () => {
   const h = await harness();
   const site = {url:'https://www.zhipin.com/web/geek/chat',tab:{id:1}};
@@ -440,6 +520,51 @@ test('浮窗为每个职位选择最近的人工消息，并区分发送方', as
   assert.deepEqual((await previews())['职位 j1'], {text:'下周方便聊吗？',direction:'in'});
   await collect('other', 'j1', [{id:'403',time:202,text:'发送方没有记录的消息',direction:'unknown'}]);
   assert.deepEqual((await previews())['职位 j1'], {text:'发送方没有记录的消息',direction:'unknown'});
+  const board = await h.get(A);
+  assert.deepEqual(Object.fromEntries(board.jobs.map(job => [job.title, job.latestMessage])), {
+    '职位 j1':{text:'发送方没有记录的消息',direction:'unknown',time:202},
+    '职位 j2':{text:'这边还在招聘',direction:'in',time:160},
+    '职位 j3':undefined,
+  });
+  await h.ingest(snapshot(A,[
+    row('other','j1',{lastText:'列表里的新回复',lastIsSelf:false,lastMessageAt:310}),
+    row('shared','j2',{lastText:'切换职位前的列表摘要',lastIsSelf:false,lastMessageAt:320}),
+    row('withdrawn','j4',{lastText:'对方撤回了一条消息',lastIsSelf:false,lastMessageAt:330}),
+  ]));
+  const updated = Object.fromEntries((await h.get(A)).jobs.map(job => [job.title, job.latestMessage]));
+  assert.deepEqual(updated['职位 j1'],{text:'列表里的新回复',direction:'in',time:310,fromList:true});
+  assert.deepEqual(updated['职位 j2'],{text:'这边还在招聘',direction:'in',time:160});
+  assert.equal(updated['职位 j4'],undefined);
+  assert.deepEqual((await previews())['职位 j1'],{text:'发送方没有记录的消息',direction:'unknown'});
+});
+
+test('最新对话只为自己发出的消息显示已送达或已读，并匹配同一条摘要', async () => {
+  const h = await harness();
+  const site = {url:'https://www.zhipin.com/web/geek/chat',tab:{id:1}};
+  const text = '请问可以约下周吗？';
+  const message = {id:'1',time:20,text,direction:'out',status:1};
+  const collect = messages => h.ingest({type:'CONVERSATION',account:A,row:row('chat','j1'),messages});
+  const summary = time => h.ingest(snapshot(A,[row('chat','j1',{lastText:text,lastIsSelf:true,lastMessageAt:time,lastMsgStatus:2})]));
+  const board = async () => (await h.get(A)).jobs.find(job=>job.id===A+':job:j1').latestMessage;
+  const widget = async () => (await h.send({type:'WIDGET_GET',account:A,jobId:'j1'},site)).data.jobs[0].latestMessage;
+  await collect([message]);
+  assert.equal((await board()).receipt,'delivered');
+  await summary(10);
+  assert.equal((await board()).receipt,'delivered');
+  await summary(20);
+  assert.equal((await board()).receipt,'read');
+  assert.deepEqual(await widget(),{text,direction:'out',receipt:'read'});
+  await collect([{...message,status:2}]);
+  await collect([message,{...message,status:null}]);
+  assert.equal((await board()).receipt,'read');
+  await collect([{id:'2',time:30,text:'可以的',direction:'in',status:2}]);
+  assert.equal((await board()).receipt,undefined);
+  await collect([{id:'3',time:40,text:'谢谢',direction:'out',status:0}]);
+  assert.equal((await board()).receipt,undefined);
+
+  await h.ingest(snapshot(A,[row('list','j2',{lastText:'你好',lastIsSelf:true,lastMessageAt:50,lastMsgStatus:1})]));
+  assert.deepEqual((await h.get(A)).jobs.find(job=>job.id===A+':job:j2').latestMessage,
+    {text:'你好',direction:'out',time:50,fromList:true,receipt:'delivered'});
 });
 
 test('最新人工消息跳过资讯、联系方式和交互卡片，保留同样文字的普通聊天', async () => {
@@ -979,6 +1104,25 @@ test('非法消息结构被拒绝，批次不会产生部分数据或注册账�
   for(const data of invalid){const result=await h.ingest(data);assert.equal(result.ok,false);}
   const data=await h.get();assert.equal(data.account,null);assert.deepEqual(data.accounts,[]);
   for(const name of ['companies','jobs','conversations','events']) assert.deepEqual(data[name],[]);
+});
+
+test('采集间隔按账号持久化，仅允许扩展页保存，在启动时传给聊天页',async()=>{
+  const h=await harness();
+  await h.ingest(snapshot(A,[]));
+  await h.ingest(snapshot(B,[]),{url:'https://www.zhipin.com/web/geek/chat',tab:{id:2}});
+  assert.equal((await h.get(A)).syncIntervalSeconds,3);
+  for(const intervalSeconds of [0,31,3.5,'12',null]){
+    assert.equal((await h.send({type:'SET_SYNC_INTERVAL',account:A,intervalSeconds})).ok,false);
+  }
+  assert.equal((await h.send({type:'SET_SYNC_INTERVAL',account:A,intervalSeconds:12},{url:'https://www.zhipin.com/web/geek/chat',tab:{id:1}})).ok,false);
+  assert.equal((await h.send({type:'SET_SYNC_INTERVAL',account:A,intervalSeconds:12})).ok,true);
+  const restarted=await harness({db:h.db});
+  assert.equal((await restarted.get(A)).syncIntervalSeconds,12);
+  assert.equal((await restarted.get(B)).syncIntervalSeconds,3);
+  await restarted.ingest(snapshot(A,[]));
+  restarted.tabs.push({id:1,active:true});
+  assert.equal((await restarted.send({type:'SYNC',account:A,intervalSeconds:3})).ok,true);
+  assert.equal(restarted.sent.find(entry=>entry.message.type==='SYNC').message.intervalSeconds,12);
 });
 
 test('同账号互斥，停止发送到启动标签，旧任务和其他标签的进度被拒绝',async()=>{

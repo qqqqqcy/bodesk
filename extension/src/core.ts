@@ -9,7 +9,7 @@ const priorityOf = (value?: Contribution) => typeof value?.priority==='number'&&
 const timeOf = (value?: Contribution) => Number.isFinite(Number(value?.observedAt)) ? Number(value?.observedAt) : 0;
 const messageTime = (m: MessageRecord) => Number.isFinite(Number(m.time)) ? Number(m.time) : 0;
 const isSystem = (m: MessageRecord) => m.isSystem !== false && (m.isSystem === true || Number(m.type) === 1 && Number(m.bodyType) === 4 || [3,4].includes(Number(m.type)) && Number(m.bodyType) === 1 && Number(m.templateId) === 3);
-const isWithdrawn = (text: unknown) => /(?:撤回了一条消息|撤回了一条|消息已撤回|已撤回一条消息|撤回了消息)/.test(String(text||''));
+export const isWithdrawn = (text: unknown) => /(?:撤回了一条消息|撤回了一条|消息已撤回|已撤回一条消息|撤回了消息)/.test(String(text||''));
 const isInterviewCard = (message: MessageRecord) => message.messageType === 'interview' || (Number(message.type) === 3 && Number(message.bodyType) === 14 && Number(message.templateId) === 1);
 const isHuman = (m: MessageRecord) => !isInterviewCard(m) && !isSystem(m) && !isWithdrawn(m.text) && (m.isSystem === false || (m.type == null && m.bodyType == null) || ([1,3].includes(Number(m.type)) && Number(m.bodyType) === 1 && Number(m.templateId) !== 3) || (Number(m.type) === 1 && Number(m.bodyType) === 7));
 
@@ -25,15 +25,20 @@ export function isChatMessage(message: MessageRecord) {
 }
 const questionable = (text: string) => /(?:不想|不需要|不要|无需|不用|不必|不能|无法|未|没有|没|尚未|取消|失败|并非|不是|别|如果|假如|例如|比如|[“”「」『』"'])/.test(text);
 
+const resumeStages = [
+  ['resume_applied', /^附件简历请求已发送$/],
+  ['resume_sent', /^(?:对方已同意[，,]\s*)?(?:您的|你的).{0,30}简历已发送给\s*(?:Boss|对方)$/i],
+  ['resume_viewed', /^(?:对方|Boss|BOSS)已查看了?(?:您的|你的)(?:附件|在线)?简历$/i],
+] as const;
+
+export const resumeEventStage = (label: string) => resumeStages.find(([, pattern]) => pattern.test(label))?.[0];
+
 function resumeLabel(text: unknown) {
   const value=String(text || '').trim();
   // System labels may contain other card content; only accept a complete label line.
   for (const line of value.split(/\n+/).map(s=>s.trim().replace(/[。！!]+$/,''))) {
     if (/(?:如果|假如|例如|比如|我说过|[“”「」『』"'])/.test(line)) continue;
-    if (/^(?:对方已同意[，,]\s*)?(?:您的|你的).{0,30}简历已发送给\s*(?:Boss|对方)$/i.test(line)) return line;
-    if (/^附件简历请求已发送$/.test(line)) return line;
-    if (/^(?:对方|Boss|BOSS)已查看了?(?:您的|你的)附件简历$/i.test(line)) return line;
-    if (/^(?:对方|Boss|BOSS)已查看了?(?:您的|你的)(?:在线)?简历$/i.test(line)) return line;
+    if (resumeEventStage(line)) return line;
     // Preserve other explicit platform status labels, including failure or cancellation.
     if (line.length<=160 && /(?:简历.{0,45}(?:已发送|发送成功|已查看|被查看|已接收|已收到|已同意|已拒绝|已过期|已撤回|已失效|已取消|发送失败|未发送|未查看|已投递|请求被拒绝)|(?:已查看|查看了|已接收|已收到|已拒绝|已同意|已撤回|已发送|已投递|已取消|发送失败|没有查看|未查看).{0,45}简历)/.test(line)) return line;
   }

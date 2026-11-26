@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {browserHarness} from './support/dom.js';
+import {browserHarness, flush} from './support/dom.js';
 
 const source=await readFile(new URL('../../extension/dist/content.js',import.meta.url),'utf8');
 const harness=sendMessage=>browserHarness(source,sendMessage);
@@ -18,6 +18,22 @@ const snapshot=(account='a',jobId='j1')=>({type:'SNAPSHOT',account,selectedId:'c
 // The server returns the older JD first, while the current JD is the second row.
 const data=()=>({companyId:'company-a',companyName:'示例公司',companyNote:'公司原备注',settings:{},jobs:[{id:'j2',title:'后端',persisted:true,updatedAt:20,firstConversationAt:10,status:'awaiting_self',note:''},{id:'j1',title:'前端',persisted:true,updatedAt:30,firstConversationAt:20,status:'resume_event',label:'附件简历请求已发送',manual:false,current:true,note:'职位原备注'}]});
 
+test('浮窗直接打开当前账号的 JD 看板，也保留采集入口', async () => {
+  const opened = [];
+  const h = harness(async message => {
+    if (message.type === 'OPEN_DASHBOARD') opened.push(message);
+    return {ok: true, data: data()};
+  });
+  await h.deliver(snapshot());
+  const buttons = all(h.widget(), 'bh-overview');
+  assert.deepEqual(buttons.map(button => button.textContent), ['JD 看板', '采集与导出']);
+  for (const button of buttons) await button.emit('click');
+  assert.deepEqual(opened, [
+    {type: 'OPEN_DASHBOARD', account: 'a', view: 'board'},
+    {type: 'OPEN_DASHBOARD', account: 'a', view: 'collection'},
+  ]);
+});
+
 test('浮窗收起时隐藏内容，重新展开保留备注草稿，切换职位也保持收起状态',async()=>{
   const h=visualHarness(async message=>message.type==='INGEST'?{ok:true}:{ok:true,data:data()});
   await h.deliver(snapshot());
@@ -25,6 +41,7 @@ test('浮窗收起时隐藏内容，重新展开保留备注草稿，切换职�
   const body=h.document.getElementById(toggle.getAttribute('aria-controls'));
   const company=find(h.widget(),'bh-company');
   assert.equal(toggle.getAttribute('aria-expanded'),'true');
+  assert.equal(toggle.getAttribute('aria-label'),'收起浮窗');
   assert.equal(body.hidden,false);
 
   await currentNote(h).emit('click');
@@ -33,14 +50,17 @@ test('浮窗收起时隐藏内容，重新展开保留备注草稿，切换职�
   await input.emit('input');
   await toggle.emit('click');
   assert.equal(toggle.getAttribute('aria-expanded'),'false');
-  assert.equal(toggle.textContent,'展开浮窗');
+  assert.equal(toggle.getAttribute('aria-label'),'展开浮窗');
+  assert.equal(toggle.textContent,'');
   assert.equal(body.hidden,true);
   assert.equal(company.hidden,true);
+  assert.equal(find(h.widget(),'bh-note-input'),undefined);
 
   await toggle.emit('click');
   assert.equal(toggle.getAttribute('aria-expanded'),'true');
   assert.equal(body.hidden,false);
   assert.equal(company.hidden,false);
+  await currentNote(h).emit('click');
   assert.equal(find(h.widget(),'bh-note-input').value,'未保存的备注');
 
   await toggle.emit('click');
@@ -99,8 +119,8 @@ test('拖动浮窗后保存位置，新页面恢复，窗口缩小时保持可�
 test('浮窗按发送方显示人工消息预览并保留完整的纯文本', async () => {
   const details = data();
   const longMessage = '这是较长的消息'.repeat(40) + '\n<img src=x onerror="window.executed=true">';
-  details.jobs[0].latestMessage = {text:longMessage,direction:'out'};
-  details.jobs[1].latestMessage = {text:'可以约下周沟通',direction:'in'};
+  details.jobs[0].latestMessage = {text:longMessage,direction:'out',receipt:'read'};
+  details.jobs[1].latestMessage = {text:'可以约下周沟通',direction:'in',receipt:'read'};
   const h = visualHarness(async message => message.type==='INGEST' ? {ok:true} : {ok:true,data:details});
   await h.deliver(snapshot());
   const [outgoing, incoming] = all(h.widget(),'bh-message-preview');
@@ -108,6 +128,8 @@ test('浮窗按发送方显示人工消息预览并保留完整的纯文本', as
   assert.ok(incoming.classList.contains('bh-message-in'));
   assert.equal(find(outgoing,'bh-message-sender').textContent,'我');
   assert.equal(find(incoming,'bh-message-sender').textContent,'Boss');
+  assert.equal(outgoing.querySelector('[data-receipt="read"]').textContent,'已读');
+  assert.equal(incoming.querySelector('.message-receipt'),null);
   assert.equal(find(outgoing,'bh-message-text').textContent,longMessage);
   assert.equal(outgoing.querySelector('img'), null);
 });
@@ -146,12 +168,15 @@ test('点击状态直接显示选项，确认后才保存手动状态或恢复�
 });
 
 test('职位页的JD卡片可直接删除，取消确认不写入，成功后刷新浮窗',async()=>{
-  const sent=[],d=data();let approved=false;
-  const h=visualHarness(async message=>{sent.push(message);if(message.type==='INGEST')return{ok:true};if(message.type==='DELETE_JOB'){d.jobs=d.jobs.filter(job=>job.id!==message.jobId);return{ok:true};}return{ok:true,data:d};},{confirm:()=>approved});
+  const sent=[],d=data();
+  const h=visualHarness(async message=>{sent.push(message);if(message.type==='INGEST')return{ok:true};if(message.type==='DELETE_JOB'){d.jobs=d.jobs.filter(job=>job.id!==message.jobId);return{ok:true};}return{ok:true,data:d};});
   await h.deliver({type:'PAGE_CONTEXT',account:'a',jobId:'j1',companyName:'示例公司',title:'前端'});
   let remove=find(all(h.widget(),'bh-job').find(row=>row.getAttribute('aria-current')==='true'),'bh-job-delete');
   assert.equal(remove.disabled,false);await remove.emit('click');assert.ok(!sent.some(message=>message.type==='DELETE_JOB'));
-  approved=true;await remove.emit('click');const deletion=sent.find(message=>message.type==='DELETE_JOB');
+  await find(find(h.widget(),'bh-delete-dialog'),'bh-cancel').emit('click');
+  assert.ok(!sent.some(message=>message.type==='DELETE_JOB'));
+  await remove.emit('click');await find(h.widget(),'bh-confirm-delete').emit('click');
+  const deletion=sent.find(message=>message.type==='DELETE_JOB');
   assert.equal(deletion.account,'a');assert.equal(deletion.jobId,'j1');assert.equal(deletion.expectedUpdatedAt,30);
   assert.deepEqual(rowTitles(h),['后端']);assert.match(find(h.widget(),'bh-notice').textContent,/已删除/);
 });
@@ -192,26 +217,42 @@ test('浮窗收藏标识独立于沟通状态，JD标题是安全的详情页链
   assert.equal(find(rows[0],'bh-job-title').tagName,'SPAN');
 });
 
-test('职位页浮窗只读展示已有公司记录，高亮当前JD并禁止编辑',async()=>{
+test('职位页浮窗复用公司备注、JD 备注和状态确认',async()=>{
   const sent=[],d=data();
-  const h=visualHarness(async message=>{sent.push(message);return message.type==='INGEST'?{ok:true}:{ok:true,data:d};});
+  const h=visualHarness(async message=>{
+    sent.push(message);
+    if(message.type==='SAVE_COMPANY_NOTE')d.companyNote=message.note;
+    if(message.type==='SAVE_JOB'){
+      const job=d.jobs.find(item=>item.id===message.jobId);
+      if(Object.hasOwn(message,'note'))job.note=message.note;
+      if(message.status){job.status=message.status;job.manual=true;}
+    }
+    return message.type==='WIDGET_GET'?{ok:true,data:d}:{ok:true};
+  });
   await h.deliver({type:'PAGE_CONTEXT',account:'a',jobId:'j1',companyName:'示例公司',title:'前端'});
   assert.equal(sent.find(message=>message.type==='WIDGET_GET').preview,true);
   assert.deepEqual(rowTitles(h),['后端','前端']);
-  assert.equal(currentStatus(h).disabled,true);
-  assert.equal(find(h.widget(),'bh-company-note-edit').disabled,true);
-  assert.equal(find(h.widget(),'bh-job-note-edit'),undefined);
+  assert.equal(currentStatus(h).disabled,false);
+  assert.equal(find(h.widget(),'bh-company-note-edit').disabled,false);
+  assert.ok(currentNote(h));
   assert.equal(find(h.widget(),'bh-notice').hidden,true);
-  assert.doesNotMatch(h.widget().textContent,/仅查看|不会新增|当前浏览|当前 JD 已记录/);
-  assert.doesNotMatch(h.widget().textContent,/仅查看|不会新增|不采集|当前浏览|当前 JD 已记录/);
-  assert.ok(!/仅查看|浏览不会|当前浏览|当前 JD 已记录/.test(h.widget().textContent));
   assert.match(h.widget().textContent,/公司原备注/);
   await currentStatus(h).emit('click');
-  assert.equal(find(h.widget(),'bh-editor'),undefined);
-  await h.deliver(snapshot());
-  assert.equal(currentStatus(h).disabled,false);
-  assert.ok(find(h.widget(),'bh-job-note-edit'));
+  await statusOption(h,'passed').emit('click');
   assert.ok(!sent.some(message=>message.type.startsWith('SAVE_')));
+  await find(statusDialog(h),'bh-save').emit('click');
+  assert.match(currentStatus(h).textContent,/面试通过/);
+
+  for(const [button,note] of [[find(h.widget(),'bh-company-note-edit'),'详情公司备注'],[currentNote(h),'详情职位备注']]){
+    await button.emit('click');
+    const input=find(h.widget(),'bh-note-input');
+    input.value=note;
+    await input.emit('input');
+    await find(h.widget(),'bh-editor').emit('submit');
+    assert.match(h.widget().textContent,new RegExp(note));
+  }
+  assert.deepEqual(sent.filter(message=>message.type.startsWith('SAVE_')).map(message=>[message.type,message.status||message.note]),
+    [['SAVE_JOB','passed'],['SAVE_COMPANY_NOTE','详情公司备注'],['SAVE_JOB','详情职位备注']]);
 });
 
 test('职位页切换到未记录公司和未选中职位时清除高亮与旧公司记录',async()=>{
@@ -244,6 +285,34 @@ test('切换当前JD、修改状态或标题都不会重新排列浮窗',async()
   await h.deliver(snapshot('a','j2'));assert.deepEqual(rowTitles(h),['后端','前端']);assert.equal(all(h.widget(),'bh-job')[0].getAttribute('aria-current'),'true');
   d.jobs[0].title='Z 职位';d.jobs[1].title='A 职位';await h.deliver({type:'CONVERSATION',account:'a',row:{id:'c1'}});
   assert.deepEqual(rowTitles(h),['Z 职位','A 职位']);
+});
+test('当前和其他职位使用相同的卡片结构，状态可直接选择并点浮窗外关闭',async()=>{
+  const sent = [];
+  const details = data();
+  for (const job of details.jobs) {
+    Object.assign(job, {favorite: true, note: '职位备注', latestMessage: {direction: 'in', text: '约时间沟通'}});
+  }
+  const h = visualHarness(async message => {
+    sent.push(message);
+    return message.type === 'INGEST' ? {ok: true} : {ok: true, data: details};
+  });
+  await h.deliver(snapshot());
+  const [relatedJob, activeJob] = all(h.widget(), 'bh-job');
+  const childClasses = job => Array.from(job.children, child => child.className);
+  assert.deepEqual(childClasses(relatedJob), childClasses(activeJob));
+  for (const job of [relatedJob, activeJob]) {
+    for (const className of ['bh-favorite', 'bh-message-preview', 'bh-job-note-edit', 'bh-note-text']) {
+      const element = find(job, className);
+      assert.ok(element && !element.closest('[hidden]'), className);
+    }
+  }
+  const status = find(relatedJob, 'bh-job-status');
+  await status.emit('click');
+  assert.ok(find(relatedJob, 'bh-status-picker'));
+  h.document.body.dispatchEvent(new h.window.PointerEvent('pointerdown', {bubbles: true}));
+  await flush();
+  assert.equal(status.getAttribute('aria-expanded'), 'false');
+  assert.ok(!sent.some(message => message.type === 'SAVE_JOB'));
 });
 test('浮窗展示最新简历系统提示，人工状态仍优先',async()=>{
   let manual=false;const d=data();
@@ -338,9 +407,33 @@ test('公司备注单独保存，JD备注不受影响',async()=>{
   const d=data(),sent=[];
   const h=visualHarness(async m=>{sent.push(m);if(m.type==='INGEST')return{ok:true};if(m.type==='SAVE_COMPANY_NOTE'){d.companyNote=m.note;return{ok:true};}return{ok:true,data:d};});
   await h.deliver(snapshot());await find(h.widget(),'bh-company-note-edit').emit('click');
-  const form=find(h.widget(),'bh-editor'),input=find(form,'bh-note-input');input.value='公司沟通偏好';await input.emit('input');await form.emit('submit');
+  const form=find(h.widget(),'bh-editor'),input=find(form,'bh-note-input');
+  assert.ok(form.closest('.bh-layer'));
+  assert.equal(find(find(h.widget(),'bh-company-notes'),'bh-note-text').textContent,'公司原备注');
+  input.value='公司沟通偏好';await input.emit('input');await form.emit('submit');
   const save=sent.find(m=>m.type==='SAVE_COMPANY_NOTE');assert.equal(save.companyId,'company-a');assert.equal(save.account,'a');assert.equal(save.note,'公司沟通偏好');
   assert.equal(d.jobs[1].note,'职位原备注');assert.ok(h.widget().textContent.includes('公司沟通偏好'));
+});
+test('公司垃圾桶打开确认浮层，确认后才删除并隐藏公司操作',async()=>{
+  const sent=[];
+  let details={...data(),companyPersisted:true};
+  const h=visualHarness(async message=>{
+    sent.push(message);
+    if(message.type==='DELETE_COMPANY')details={companyName:'示例公司',companyDeleted:true,jobs:[]};
+    return {ok:true,data:details};
+  });
+  await h.deliver(snapshot());
+  const remove=find(h.widget(),'bh-company-delete');
+  await remove.emit('click');
+  const dialog=find(h.widget(),'bh-delete-dialog');
+  assert.equal(dialog.open,true);
+  assert.match(dialog.textContent,/旗下所有 JD/);
+  assert.ok(!sent.some(message=>message.type==='DELETE_COMPANY'));
+  assert.equal(all(h.widget(),'bh-job').length,2);
+  await find(dialog,'bh-confirm-delete').emit('click');
+  assert.deepEqual(sent.find(message=>message.type==='DELETE_COMPANY'),{type:'DELETE_COMPANY',account:'a',companyId:'company-a',expectedNote:'公司原备注'});
+  assert.equal(find(h.widget(),'bh-company-delete'),undefined);
+  assert.equal(all(h.widget(),'bh-job').length,0);
 });
 test('保存失败保留草稿，切换上下文后返回可继续编辑',async()=>{
   const d=data();const h=visualHarness(async m=>m.type==='INGEST'?{ok:true}:m.type==='SAVE_JOB'?{ok:false,error:'模拟保存失败'}:{ok:true,data:d});
