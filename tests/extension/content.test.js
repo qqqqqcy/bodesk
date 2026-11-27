@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {formatRelativeStatusDate} from '../../extension/src/status.ts';
 import {browserHarness, flush} from './support/dom.js';
 
 const source=await readFile(new URL('../../extension/dist/content.js',import.meta.url),'utf8');
@@ -521,4 +522,51 @@ test('浮窗在加载、保存和删除挂起期间呈现 loading 与 pending �
   finishDelete({ok: true});
   await deleting;
   assert.equal(find(h.widget(), 'bh-delete-dialog'), undefined);
+});
+
+test('formatRelativeStatusDate 按日历与月份边界返回 7 档状态更新标签', () => {
+  const now = new Date(2026, 10, 27, 9, 0, 0).getTime();
+  const midnight = new Date(2026, 10, 27, 0, 0, 0).getTime();
+  const day = 86400_000;
+  assert.equal(formatRelativeStatusDate(undefined, now), '');
+  assert.equal(formatRelativeStatusDate(0, now), '');
+  assert.equal(formatRelativeStatusDate(-10, now), '');
+  assert.equal(formatRelativeStatusDate(NaN, now), '');
+  assert.equal(formatRelativeStatusDate(now, now), '当天');
+  assert.equal(formatRelativeStatusDate(midnight, now), '当天');
+  assert.equal(formatRelativeStatusDate(midnight - 1, now), '1 天内');
+  assert.equal(formatRelativeStatusDate(midnight - day, now), '1 天内');
+  assert.equal(formatRelativeStatusDate(midnight - day - 1, now), '3 天内');
+  assert.equal(formatRelativeStatusDate(midnight - 3 * day, now), '3 天内');
+  assert.equal(formatRelativeStatusDate(midnight - 3 * day - 1, now), '1 周内');
+  assert.equal(formatRelativeStatusDate(midnight - 7 * day, now), '1 周内');
+  assert.equal(formatRelativeStatusDate(midnight - 7 * day - 1, now), '1 周前');
+  assert.equal(formatRelativeStatusDate(new Date(2026, 9, 27, 0, 0, 0).getTime(), now), '1 周前');
+  assert.equal(formatRelativeStatusDate(new Date(2026, 9, 27, 0, 0, 0).getTime() - 1, now), '1 个月前');
+  assert.equal(formatRelativeStatusDate(new Date(2026, 7, 27, 0, 0, 0).getTime(), now), '1 个月前');
+  assert.equal(formatRelativeStatusDate(new Date(2026, 7, 27, 0, 0, 0).getTime() - 1, now), '3 个月前');
+  assert.equal(formatRelativeStatusDate(new Date(2026, 0, 1, 0, 0, 0).getTime(), now), '3 个月前');
+});
+
+test('浮窗状态行在有 statusAt 时展示相对状态日期并在缺失时省略', async () => {
+  const now = Date.now();
+  const day = 86400_000;
+  const d = data();
+  d.jobs = [
+    {id: 'j-today', title: '今日职位', persisted: true, status: 'awaiting_self', statusAt: now - 60_000, current: true, note: ''},
+    {id: 'j-3d', title: '三天职位', persisted: true, status: 'interviewing', manual: true, statusAt: now - 2 * day, note: ''},
+    {id: 'j-none', title: '无时间职位', persisted: true, status: 'awaiting_contact', note: ''},
+  ];
+  const h = visualHarness(async message => message.type === 'INGEST' ? {ok: true} : {ok: true, data: d});
+  await h.deliver(snapshot('a', 'j-today'));
+  const rows = all(h.widget(), 'bh-job');
+  const firstDate = find(rows[0], 'bh-job-status-date');
+  assert.equal(firstDate.tagName, 'TIME');
+  assert.equal(firstDate.textContent, '当天');
+  assert.match(firstDate.getAttribute('title'), /^状态更新于 /);
+  assert.equal(find(rows[0], 'bh-job-status-row').contains(firstDate), true);
+  const secondDate = find(rows[1], 'bh-job-status-date');
+  assert.equal(secondDate.textContent, '3 天内');
+  assert.match(secondDate.getAttribute('title'), /^手动设置于 /);
+  assert.equal(find(rows[2], 'bh-job-status-date'), undefined);
 });

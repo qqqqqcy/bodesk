@@ -71,6 +71,7 @@ export interface WidgetJob {
   status: string;
   label?: string;
   manual?: boolean;
+  statusAt?: number;
   current?: boolean;
   favorite?: boolean;
   jobClosed?: boolean;

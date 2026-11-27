@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BoDesk",
-  "version": "0.9.4",
+  "version": "0.14.0",
   "description": "本地优先的 BOSS 求职沟通工作台：在浮窗与 JD 看板中整理公司、职位、沟通状态、收藏与备注，支持聊天记录采集与 JSON 备份。",
   "icons": {
     "16": "assets/icon-16.png",

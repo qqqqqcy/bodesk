@@ -1,8 +1,11 @@
-import {useEffect, useRef, useState} from 'react';
+import {useEffect, useMemo, useRef, useState} from 'react';
 import type {CSSProperties} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Gear, Loader} from 'reicon';
-import {ActivityRange, boardActivityWindow, JobBoard, useBoardPreferences} from './job-board.tsx';
+import {ClipboardText, Copy, Download, FileText, Gear, Loader, Upload} from 'reicon';
+import {ActionMenu} from './action-menu.tsx';
+import {PasteImportDialog} from './backup-dialogs.tsx';
+import {formatBoardMarkdown} from './board-export.ts';
+import {ActivityRange, boardActivityWindow, buildBoardJobs, filterBoardJobs, JobBoard, useBoardPreferences} from './job-board.tsx';
 import {DashboardSelect} from './dashboard-select.tsx';
 import {Icon} from './icon.tsx';
 import {backupText} from './backup.ts';
@@ -35,6 +38,7 @@ function Dashboard() {
   const [syncRequested, setSyncRequested] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [pasteImportOpen, setPasteImportOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<'import' | 'export' | 'account' | null>(null);
   const [savingInterval, setSavingInterval] = useState(false);
   const [intervalDraft, setIntervalDraft] = useState<{account: string; seconds: number} | null>(null);
@@ -91,8 +95,8 @@ function Dashboard() {
       await request(message, account);
       try {
         await load(account);
-        notify(Object.hasOwn(message, 'status') ? '已保存状态' : '已保存备注');
-      } catch (error) {notify('已保存，刷新记录失败：' + errorText(error), true);}
+        notify(message.type === 'DELETE_JOB' ? '已删除职位记录' : Object.hasOwn(message, 'status') ? '已保存状态' : '已保存备注');
+      } catch (error) {notify((message.type === 'DELETE_JOB' ? '已删除，刷新记录失败：' : '已保存，刷新记录失败：') + errorText(error), true);}
     } finally {markBusy(false);}
   }
   async function sync() {
@@ -156,17 +160,74 @@ function Dashboard() {
     });
     intervalWrite.current = saving;
   }
-  async function exportData() {
+  function downloadText(content: string, filename: string, mimeType: string) {
+    const url = URL.createObjectURL(new Blob([content], {type: mimeType}));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.append(anchor);
+    try {anchor.click();} finally {anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 10000);}
+  }
+  async function copyText(content: string) {
+    const writeText = globalThis.navigator?.clipboard?.writeText?.bind(globalThis.navigator.clipboard);
+    if (!writeText) throw new Error('当前环境不支持直接复制，请改用导出为文件');
+    try {
+      await writeText(content);
+    } catch {
+      throw new Error('复制到剪贴板失败，请检查剪贴板权限或改用导出为文件');
+    }
+  }
+  async function exportMarkdown(mode: 'file' | 'clipboard') {
+    if (state.current.busy || state.current.stopping) return;
+    if (!filteredBoardJobs.length) {
+      notify('当前筛选下暂无可导出的 JD', true);
+      return;
+    }
+    const currentNow = Date.now();
+    const currentWindow = boardActivityWindow(board.preferences, currentNow);
+    const jobsToExport = filterBoardJobs(allBoardJobs, board.preferences.filters, currentWindow);
+    if (!jobsToExport.length) {
+      notify('当前筛选下暂无可导出的 JD', true);
+      return;
+    }
+    try {
+      const markdown = formatBoardMarkdown({
+        jobs: jobsToExport,
+        totalCount: totalJobCount,
+        preferences: board.preferences,
+        now: currentNow,
+        accountName: db?.account ? db.accountNames[db.account] : undefined,
+      });
+      if (mode === 'clipboard') {
+        await copyText(markdown);
+        notify('已复制当前筛选的 ' + jobsToExport.length + ' 个 JD 摘要（Markdown）到剪贴板');
+        return;
+      }
+      downloadText(markdown, 'BoDesk-看板摘要-' + new Date(currentNow).toISOString().replace(/[:.]/g, '-') + '.md', 'text/markdown;charset=utf-8');
+      notify('已开始导出当前筛选的 ' + jobsToExport.length + ' 个 JD 摘要（Markdown），请在浏览器下载列表查看');
+    } catch (error) {
+      notify(errorText(error), true);
+    }
+  }
+  async function exportData(mode: 'file' | 'clipboard') {
+    if (!filteredJobIds.length) {
+      notify('当前筛选下暂无可导出的 JD', true);
+      return;
+    }
     await action(async () => {
       if (state.current.mounted) setPendingAction('export');
       try {
-        const response = await request({type: 'EXPORT'});
+        const response = await request({type: 'EXPORT', jobIds: filteredJobIds});
         if (!response.data || typeof response.data !== 'object') throw new Error('导出失败：未收到有效数据');
-        const url = URL.createObjectURL(new Blob([JSON.stringify(response.data, null, 2)], {type: 'application/json;charset=utf-8'}));
-        const anchor = document.createElement('a');
-        anchor.href = url; anchor.download = 'BoDesk-备份-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json'; document.body.append(anchor);
-        try {anchor.click();} finally {anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 10000);}
-        notify('已开始导出 JSON，请在浏览器下载列表查看');
+        const json = JSON.stringify(response.data, null, 2);
+        const exportedCount = Array.isArray(response.data.jobs) ? response.data.jobs.length : filteredJobIds.length;
+        if (mode === 'clipboard') {
+          await copyText(json);
+          notify('已复制当前筛选的 ' + exportedCount + ' 个 JD JSON 到剪贴板');
+          return;
+        }
+        downloadText(json, 'BoDesk-备份-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json', 'application/json;charset=utf-8');
+        notify('已开始导出当前筛选的 ' + exportedCount + ' 个 JD JSON，请在浏览器下载列表查看');
       } finally {if (state.current.mounted) setPendingAction(null);}
     });
   }
@@ -179,6 +240,23 @@ function Dashboard() {
         notify('已导入 ' + response.added + ' 条记录，跳过 ' + response.skipped + ' 条已有记录');
       } finally {if (state.current.mounted) setPendingAction(null);}
     });
+  }
+  async function importPastedJson(json: string) {
+    if (state.current.busy || state.current.stopping) throw new Error('正在执行其他操作，请稍后重试');
+    markBusy(true);
+    if (state.current.mounted) setPendingAction('import');
+    try {
+      const response = await request({type: 'IMPORT', json});
+      try {
+        await load(response.account);
+        notify('已导入 ' + response.added + ' 条记录，跳过 ' + response.skipped + ' 条已有记录');
+      } catch (error) {
+        notify('已导入 ' + response.added + ' 条记录，但刷新记录失败：' + errorText(error), true);
+      }
+    } finally {
+      if (state.current.mounted) setPendingAction(null);
+      markBusy(false);
+    }
   }
   useEffect(() => {
     state.current.mounted = true;
@@ -223,6 +301,16 @@ function Dashboard() {
   }, []);
   const now = Date.now();
   const activityWindow = boardActivityWindow(board.preferences, now);
+  const allBoardJobs = useMemo(() => buildBoardJobs(db), [db]);
+  const filteredBoardJobs = filterBoardJobs(allBoardJobs, board.preferences.filters, activityWindow);
+  const totalJobCount = allBoardJobs.length;
+  const filteredJobIds = filteredBoardJobs.map(job => job.id);
+  const filteredJobCount = filteredJobIds.length;
+  const exportHint = filteredJobCount === 0
+    ? '仅导出当前筛选结果（暂无可导出的 JD）'
+    : filteredJobCount === totalJobCount
+      ? '仅导出当前筛选结果（共 ' + filteredJobCount + ' 个 JD）'
+      : '仅导出当前筛选结果（' + filteredJobCount + ' / ' + totalJobCount + ' 个 JD）';
   const current = db?.sync || {};
   const selectedInterval = intervalDraft && intervalDraft.account === db?.account ? intervalDraft.seconds : db?.syncIntervalSeconds ?? syncInterval.default;
   const intervalPosition = (selectedInterval - syncInterval.min) / (syncInterval.max - syncInterval.min) * 100 + '%';
@@ -244,74 +332,100 @@ function Dashboard() {
       }) ?? []} />
   </div>;
 
-  return <main className="shell">
+  return <div className="dashboard-page">
     <header className="page-header">
-      <h1 id="dashboard-title">BoDesk</h1>
-      <div className="page-actions">
-        {accountPicker}
-        <div className="file-actions">
-          <input ref={importInput} type="file" id="import-file" accept=".json,application/json" hidden onChange={event => {
-            const file = event.target.files?.[0];
-            event.target.value = '';
-            if (file) void importData(file);
-          }} />
-          <button id="import" className="button" type="button" aria-busy={pendingAction === 'import'} disabled={busy || stopping} onClick={() => importInput.current?.click()}>
-            {pendingAction === 'import' ? <><span className="bh-spinner"><Icon icon={Loader} /></span>导入中…</> : '导入 JSON'}
-          </button>
-          <button id="export" className="button" type="button" aria-busy={pendingAction === 'export'} disabled={busy || stopping || !db?.account} onClick={() => void exportData()}>
-            {pendingAction === 'export' ? <><span className="bh-spinner"><Icon icon={Loader} /></span>导出中…</> : '导出 JSON'}
-          </button>
+      <div className="page-header-inner">
+        <h1 id="dashboard-title">BoDesk</h1>
+        <div className="page-actions">
+          {accountPicker}
+          <div className="file-actions">
+            <input ref={importInput} type="file" id="import-file" accept=".json,application/json" hidden onChange={event => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (file) void importData(file);
+            }} />
+            <ActionMenu id="import" menuLabel="导入方式" busy={pendingAction === 'import'} disabled={busy || stopping}
+              label={pendingAction === 'import' ? <><span className="bh-spinner"><Icon icon={Loader} /></span>导入中…</> : '导入'}
+              items={[
+                {id: 'import-file-option', label: '从 JSON 文件导入', icon: Upload, onSelect: () => importInput.current?.click()},
+                {id: 'import-paste-option', label: '粘贴 JSON 导入', icon: ClipboardText, onSelect: () => setPasteImportOpen(true)},
+              ]} />
+            <ActionMenu id="export" menuLabel="导出方式" busy={pendingAction === 'export'} disabled={busy || stopping || !db?.account}
+              hint={exportHint}
+              label={pendingAction === 'export' ? <><span className="bh-spinner"><Icon icon={Loader} /></span>导出中…</> : '导出'}
+              sections={[
+                {
+                  id: 'summary',
+                  title: '易读摘要 · 用于 AI 分析',
+                  items: [
+                    {id: 'export-markdown-copy-option', label: '复制 Markdown 摘要', icon: Copy, disabled: !filteredJobCount, onSelect: () => void exportMarkdown('clipboard')},
+                    {id: 'export-markdown-file-option', label: '导出 Markdown 文件', icon: FileText, disabled: !filteredJobCount, onSelect: () => void exportMarkdown('file')},
+                  ],
+                },
+                {
+                  id: 'backup',
+                  title: '数据备份 · 可重新导入',
+                  items: [
+                    {id: 'export-file-option', label: '导出 JSON 文件', icon: Download, disabled: !filteredJobCount, onSelect: () => void exportData('file')},
+                    {id: 'export-copy-option', label: '复制 JSON 内容', icon: Copy, disabled: !filteredJobCount, onSelect: () => void exportData('clipboard')},
+                  ],
+                },
+              ]} />
+          </div>
         </div>
       </div>
     </header>
-    <p id="feedback" className={'feedback' + (feedback.error ? ' error' : '')} data-pending={feedback.pending || undefined} role={feedback.error ? 'alert' : 'status'} aria-live="polite" aria-atomic="true">
-      {feedback.pending && feedback.message && <span className="bh-spinner"><Icon icon={Loader} /></span>}
-      {feedback.message}
-    </p>
-    <section className="coverage" aria-label="采集" id="sync-panel">
-      <div className="sync-toolbar">
-        <ActivityRange start={board.preferences.range} end={board.preferences.rangeEnd} now={now} onChange={board.updateRange} />
-        <div className="sync-actions">
-          <button id="sync" className="button primary" type="button" aria-busy={collecting} disabled={busy || stopping || !db?.account || collecting} onClick={() => void sync()}>
-            {collecting ? <><span className="bh-spinner"><Icon icon={Loader} /></span>采集中</> : activityWindow ? '采集所选范围' : '采集全部已加载会话'}
-          </button>
-          {(collecting || stopping) && <button id="stop-sync" className="button" type="button" aria-busy={stopping} disabled={stopping || !(syncRequested || (!busy && current.running))} onClick={() => void stop()}>
-            {stopping ? <><span className="bh-spinner"><Icon icon={Loader} /></span>正在停止…</> : '停止采集'}
-          </button>}
-          <button className="sync-details-toggle" type="button" aria-label="采集设置与详情" title="采集设置与详情" aria-expanded={detailsOpen} aria-controls="sync-details"
-            onClick={() => setDetailsOpen(open => !open)}><Icon icon={Gear} /></button>
+    <main className="shell">
+      <p id="feedback" className={'feedback' + (feedback.error ? ' error' : '')} data-pending={feedback.pending || undefined} role={feedback.error ? 'alert' : 'status'} aria-live="polite" aria-atomic="true">
+        {feedback.pending && feedback.message && <span className="bh-spinner"><Icon icon={Loader} /></span>}
+        {feedback.message}
+      </p>
+      <section className="coverage" aria-label="采集" id="sync-panel">
+        <div className="sync-toolbar">
+          <ActivityRange start={board.preferences.range} end={board.preferences.rangeEnd} now={now} onChange={board.updateRange} />
+          <div className="sync-actions">
+            <button id="sync" className="button primary" type="button" aria-busy={collecting} disabled={busy || stopping || !db?.account || collecting} onClick={() => void sync()}>
+              {collecting ? <><span className="bh-spinner"><Icon icon={Loader} /></span>采集中</> : activityWindow ? '采集所选范围' : '采集全部已加载会话'}
+            </button>
+            {(collecting || stopping) && <button id="stop-sync" className="button" type="button" aria-busy={stopping} disabled={stopping || !(syncRequested || (!busy && current.running))} onClick={() => void stop()}>
+              {stopping ? <><span className="bh-spinner"><Icon icon={Loader} /></span>正在停止…</> : '停止采集'}
+            </button>}
+            <button className="sync-details-toggle" type="button" aria-label="采集设置与详情" title="采集设置与详情" aria-expanded={detailsOpen} aria-controls="sync-details"
+              onClick={() => setDetailsOpen(open => !open)}><Icon icon={Gear} /></button>
+          </div>
         </div>
-      </div>
-      <div id="sync-details" hidden={!detailsOpen}>
-        <div className="sync-details-inner">
-          <dl id="sync-metadata" className="metadata">
-            <div className="sync-field">
-              <dt><label htmlFor="sync-interval">采集请求间隔</label></dt>
-              <dd className="interval-setting" data-pending={savingInterval || undefined}>
-                <output htmlFor="sync-interval">{selectedInterval} 秒</output>
-                <div className="board-range-control interval-range" style={{'--range-end': '0%', '--range-start': intervalPosition} as CSSProperties}>
-                  <input ref={intervalInput} id="sync-interval" type="range" min={syncInterval.min} max={syncInterval.max} step={1} value={selectedInterval}
-                    aria-valuetext={selectedInterval + ' 秒'} aria-describedby="interval-scope"
-                    disabled={busy || stopping || !db?.account} onChange={event => {if (db?.account) setIntervalDraft({account: db.account, seconds: event.target.valueAsNumber});}} />
-                  <div className="board-range-rail" aria-hidden="true">
-                    <span className="board-range-selection" />
-                    <span className="board-range-thumb board-range-thumb-start" />
+        <div id="sync-details" hidden={!detailsOpen}>
+          <div className="sync-details-inner">
+            <dl id="sync-metadata" className="metadata">
+              <div className="sync-field">
+                <dt><label htmlFor="sync-interval">采集请求间隔</label></dt>
+                <dd className="interval-setting" data-pending={savingInterval || undefined}>
+                  <output htmlFor="sync-interval">{selectedInterval} 秒</output>
+                  <div className="board-range-control interval-range" style={{'--range-end': '0%', '--range-start': intervalPosition} as CSSProperties}>
+                    <input ref={intervalInput} id="sync-interval" type="range" min={syncInterval.min} max={syncInterval.max} step={1} value={selectedInterval}
+                      aria-valuetext={selectedInterval + ' 秒'} aria-describedby="interval-scope"
+                      disabled={busy || stopping || !db?.account} onChange={event => {if (db?.account) setIntervalDraft({account: db.account, seconds: event.target.valueAsNumber});}} />
+                    <div className="board-range-rail" aria-hidden="true">
+                      <span className="board-range-selection" />
+                      <span className="board-range-thumb board-range-thumb-start" />
+                    </div>
                   </div>
-                </div>
-                <span id="interval-scope" hidden>自动保存到当前账号，下次采集生效</span>
-              </dd>
-            </div>
-            {current.message && <div className="sync-field"><dt>采集结果</dt><dd className="coverage-note" role="status">{describe(current.message)}</dd></div>}
-            <div className="sync-field" id="conversation-count"><dt>已记录对话</dt><dd>{db?.conversations.length ?? '—'}</dd></div>
-            {progress && <div className="sync-field"><dt>采集进度</dt><dd className="sync-progress"><progress aria-label="本次会话处理进度" {...progress} /><span>{progress.value} / {progress.max}</span></dd></div>}
-            {entries.length ? entries.map(([key, value]) => <div className="sync-field" key={key}><dt>{names[key] || key}</dt><dd>{/At$/.test(key) ? formatTime(value) : describe(value)}</dd></div>)
-              : <div className="sync-field"><dt>覆盖情况</dt><dd>暂无采集详情</dd></div>}
-          </dl>
+                  <span id="interval-scope" hidden>自动保存到当前账号，下次采集生效</span>
+                </dd>
+              </div>
+              {current.message && <div className="sync-field"><dt>采集结果</dt><dd className="coverage-note" role="status">{describe(current.message)}</dd></div>}
+              <div className="sync-field" id="conversation-count"><dt>已记录对话</dt><dd>{db?.conversations.length ?? '—'}</dd></div>
+              {progress && <div className="sync-field"><dt>采集进度</dt><dd className="sync-progress"><progress aria-label="本次会话处理进度" {...progress} /><span>{progress.value} / {progress.max}</span></dd></div>}
+              {entries.length ? entries.map(([key, value]) => <div className="sync-field" key={key}><dt>{names[key] || key}</dt><dd>{/At$/.test(key) ? formatTime(value) : describe(value)}</dd></div>)
+                : <div className="sync-field"><dt>覆盖情况</dt><dd>暂无采集详情</dd></div>}
+            </dl>
+          </div>
         </div>
-      </div>
-    </section>
-    <JobBoard key={db?.account} snapshot={db} busy={busy} onSave={saveBoardEdit} activityWindow={activityWindow} now={now} board={board} />
-  </main>;
+      </section>
+      <JobBoard key={db?.account} snapshot={db} busy={busy} onSave={saveBoardEdit} activityWindow={activityWindow} now={now} board={board} />
+      {pasteImportOpen && <PasteImportDialog onImport={importPastedJson} onClose={() => setPasteImportOpen(false)} />}
+    </main>
+  </div>;
 }
 
 createRoot(document.getElementById('root')!).render(<Dashboard />);

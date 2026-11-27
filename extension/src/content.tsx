@@ -5,10 +5,12 @@ import {FavoriteMark, Icon} from './icon.tsx';
 import {MessageReceipt, messageSenders} from './message-receipt.tsx';
 import {NoteIcon, showEditorDialog, statusOptionLabel, StatusOptions} from './record-editing.tsx';
 import type {ExternalRecord, HumanMessagePreview, WidgetContext, WidgetData, WidgetJob} from './types.ts';
-import {jobURL, normalizeStatus, statusLabel} from './status.ts';
+import {formatRelativeStatusDate, jobURL, normalizeStatus, statusLabel} from './status.ts';
 import {attachWidgetDragHandle} from './widget-position.ts';
 import './typography.css';
 import '../content.css';
+
+const statusDateFormat = new Intl.DateTimeFormat('zh-CN', {year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'});
 
 const CHANNEL = 'boss-local-helper-v1';
 type NoteKind = 'job-note' | 'company-note';
@@ -318,6 +320,7 @@ function Job({job, context}: {job: WidgetJob; context: WidgetContext}) {
   const deleteKey = editorKey('job-delete', job.id);
   const status = !job.manual && job.status === 'resume_event' && job.label ? job.label : statusLabel(job.status);
   const statusText = status + (job.manual ? '（手动）' : '');
+  const statusDateLabel = formatRelativeStatusDate(job.statusAt);
   const statusOpen = view.editor === statusKey;
   const canEditStatus = !!job.id;
   const noteLabel = job.note ? '编辑 JD 备注' : '添加 JD 备注';
@@ -345,6 +348,8 @@ function Job({job, context}: {job: WidgetJob; context: WidgetContext}) {
         aria-expanded={canEditStatus ? statusOpen : undefined} aria-controls={statusOpen ? statusPickerId : undefined}
         onClick={() => {if (statusOpen) void closeEditor(); else activateEditor(statusKey);}}
         onKeyDown={event => {if (statusOpen && event.key === 'Escape') {event.stopPropagation(); void closeEditor();}}}>{statusText}{canEditStatus && <Icon icon={ChevronDown} />}</button>
+      {statusDateLabel && job.statusAt && <time className="bh-job-status-date" dateTime={new Date(job.statusAt).toISOString()}
+        title={(job.manual ? '手动设置于 ' : '状态更新于 ') + statusDateFormat.format(job.statusAt)}>{statusDateLabel}</time>}
     </div>
     {statusOpen && <StatusPicker key={view.session} id={statusPickerId} job={job} editor={statusKey} previousStatus={status} dismiss={closeEditor} />}
     {job.latestMessage && <LatestMessage {...job.latestMessage} />}

@@ -40,10 +40,10 @@ function isBackupRecord(store: BackupStore, row: unknown, account: string): row 
 }
 
 export function readBackup(json: unknown) {
-  if (typeof json !== 'string' || json.length > maxBackupBytes) throw new Error('备份文件过大或无效');
+  if (typeof json !== 'string' || json.length > maxBackupBytes) throw new Error('备份内容过大或无效');
   let data: unknown;
-  try {data = JSON.parse(json);} catch {throw new Error('文件不是有效的 JSON');}
-  if (!record(data) || typeof data.account !== 'string' || !/^[a-f0-9]{24}$/.test(data.account)) throw new Error('请选择 BoDesk 导出的账号备份');
+  try {data = JSON.parse(json);} catch {throw new Error('内容不是有效的 JSON');}
+  if (!record(data) || typeof data.account !== 'string' || !/^[a-f0-9]{24}$/.test(data.account)) throw new Error('请提供 BoDesk 导出的账号备份');
   const {account, sourceGroup} = data;
   if (sourceGroup !== undefined && sourceGroup !== 'real' && sourceGroup !== 'mock') throw new Error('备份的账号来源无效');
   const tables: [BackupStore, ExternalRecord[]][] = [];

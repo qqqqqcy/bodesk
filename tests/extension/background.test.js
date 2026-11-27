@@ -469,7 +469,7 @@ test('WIDGET_GET 按已知职位返回同公司职位并隔离账号',async()=>{
   await h.send({type:'SET_STATUS',account:A,jobId:`${A}:job:j2`,status:'interviewing'});
   await h.bind(A,site);
   const result=await h.send({type:'WIDGET_GET',account:A,jobId:'j2',companyName:'错误公司',title:'页面标题'},site);
-  result.data.jobs=result.data.jobs.map(({url,favorite,updatedAt,...job})=>{assert.equal(favorite,false);assert.equal(typeof updatedAt,'number');assert.equal(url,'https://www.zhipin.com/job_detail/'+job.id.split(':job:')[1]+'.html');return job;});
+  result.data.jobs=result.data.jobs.map(({url,favorite,updatedAt,statusAt,...job})=>{assert.equal(favorite,false);assert.equal(typeof updatedAt,'number');if(job.id.endsWith(':job:j2'))assert.equal(typeof statusAt,'number');else assert.equal(statusAt,undefined);assert.equal(url,'https://www.zhipin.com/job_detail/'+job.id.split(':job:')[1]+'.html');return job;});
   assert.deepEqual(result,{ok:true,data:{companyId:`${A}:company:模拟公司`,companyName:'模拟公司',companyNote:'',companyPersisted:true,settings:{},jobs:[
     {id:`${A}:job:j1`,title:'职位 j1',status:'awaiting_contact',label:'未知',manual:false,current:false,note:'',persisted:true,firstConversationAt:0},
     {id:`${A}:job:j2`,title:'职位 j2',status:'interviewing',label:'未知',manual:true,current:true,note:'',persisted:true,firstConversationAt:0}
@@ -1330,4 +1330,66 @@ test('被动观察保留每次运行的连续覆盖证明，失败后已提交�
   history=(await h.get(A)).conversations[0].history;
   assert.equal(history.runId,next.runId);assert.equal(history.syncRuns[start.runId].pages,1);assert.equal(history.syncRuns[next.runId].serverReportsEnd,true);
   const exported=await h.send({type:'EXPORT',account:A});assert.deepEqual(exported.data.messages.map(m=>m.messageId).sort(),['m1','m2']);
+});
+
+test('WIDGET_GET 返回与看板一致的 statusAt 并在手动修订与待沟通时同步更新或省略', async () => {
+  const h = await harness(), site = {url: 'https://www.zhipin.com/web/geek/chat', tab: {id: 1}}, jobId = A + ':job:j1';
+  const widgetJob = async id => (await h.send({type: 'WIDGET_GET', account: A, jobId: id, companyName: '模拟公司'}, site)).data.jobs.find(j => j.id === A + ':job:' + id);
+  await h.ingest(snapshot(A, [
+    row('c1', 'j1', {lastIsSelf: false, lastText: '您好，看下岗位', lastMessageAt: 1000}),
+    row('c2', 'j2', {}),
+  ]));
+  assert.equal((await widgetJob('j1')).statusAt, 1000);
+  assert.equal((await widgetJob('j2')).statusAt, undefined);
+  assert.equal((await h.send({type: 'SAVE_JOB', account: A, jobId, status: 'interviewing'})).ok, true);
+  const manualWidget = await widgetJob('j1');
+  const manualDash = (await h.get(A)).jobs.find(j => j.id === jobId);
+  assert.equal(manualWidget.manual, true);
+  assert.equal(manualWidget.statusAt, manualDash.statusAt);
+  assert.ok(manualWidget.statusAt >= 1000);
+  assert.equal((await h.send({type: 'SET_STATUS', account: A, jobId, status: 'auto'})).ok, true);
+  assert.equal((await widgetJob('j1')).statusAt, 1000);
+});
+
+test('EXPORT 支持按指定 jobIds 导出子集，保留关联数据且可重新导入', async () => {
+  const source = await harness();
+  const mock = {url: 'http://127.0.0.1:4173/web/geek/chat', tab: {id: 7}};
+  await source.ingest({type: 'SNAPSHOT', account: A, rows: [
+    {id: 'c1', jobId: 'j1', name: '王HR', companyName: '公司甲', jobTitle: '职位一'},
+    {id: 'c2', jobId: 'j2', name: '李HR', companyName: '公司乙', jobTitle: '职位二'},
+  ]}, mock);
+  await source.ingest({type: 'CONVERSATION', account: A, row: {id: 'c1', jobId: 'j1', name: '王HR', companyName: '公司甲', jobTitle: '职位一'}, messages: [
+    {id: 'm1', jobId: 'j1', text: '岗位一消息', time: 1000, direction: 'in'},
+    {id: 'm2', jobId: 'other', text: '同会话另一职位消息', time: 2000, direction: 'in'},
+  ]}, mock);
+  await source.ingest({type: 'CONVERSATION', account: A, row: {id: 'c2', jobId: 'j2', name: '李HR', companyName: '公司乙', jobTitle: '职位二'}, messages: [
+    {id: 'm3', jobId: 'j2', text: '岗位二消息', time: 3000, direction: 'in'},
+  ]}, mock);
+  await source.send({type: 'SAVE_JOB', account: A, jobId: A + ':job:j1', note: '重点跟进', status: 'interviewing'});
+  await source.send({type: 'SAVE_JOB', account: A, jobId: A + ':job:j2', note: '暂不考虑', status: 'failed'});
+
+  const invalid = await source.send({type: 'EXPORT', account: A, jobIds: ['bad-id']});
+  assert.equal(invalid.ok, false);
+  const crossAccount = await source.send({type: 'EXPORT', account: A, jobIds: [B + ':job:j1']});
+  assert.equal(crossAccount.ok, false);
+
+  const filtered = await source.send({type: 'EXPORT', account: A, jobIds: [A + ':job:j1']});
+  assert.equal(filtered.ok, true, filtered.error);
+  assert.deepEqual(filtered.data.jobs.map(j => j.id), [A + ':job:j1']);
+  assert.deepEqual(filtered.data.companies.map(c => c.name), ['公司甲']);
+  assert.deepEqual(filtered.data.conversations.map(c => c.id), [A + ':conversation:c1']);
+  assert.deepEqual(filtered.data.messages.map(m => m.messageId), ['m1']);
+  assert.ok(filtered.data.events.length > 0);
+  assert.ok(filtered.data.events.every(e => e.jobId === A + ':job:j1'));
+  assert.equal(filtered.data.sourceGroup, 'mock');
+
+  const target = await harness();
+  const imported = await target.send({type: 'IMPORT', json: JSON.stringify(filtered.data)});
+  assert.equal(imported.ok, true, imported.error);
+  const restored = await target.get(A);
+  assert.deepEqual(restored.jobs.map(j => j.id), [A + ':job:j1']);
+  assert.equal(restored.jobs[0].note, '重点跟进');
+  assert.equal(restored.jobs[0].status, 'interviewing');
+  assert.equal(restored.jobs[0].latestMessage?.text, '岗位一消息');
+  assert.deepEqual(restored.companies.map(c => c.name), ['公司甲']);
 });

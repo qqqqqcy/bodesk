@@ -127,6 +127,7 @@
     justify-content: space-between;
     gap: 4px 8px;
   }
+  & .bh-job-status-row { flex-wrap: wrap; }
   & .bh-job-heading-row { justify-content: start; }
   & .bh-job {
     display: grid;
@@ -169,6 +170,15 @@
     text-align: start;
   }
   & .bh-job-status[aria-expanded="true"] { background: var(--bh-active); }
+  & .bh-job-status-date {
+    flex: none;
+    margin-inline-start: auto;
+    color: var(--bh-muted);
+    font-size: 13px;
+    font-weight: 400;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
   & :is(.bh-job-status, .bh-message-toggle) .bh-icon { transition: rotate var(--bh-dur-base) var(--bh-ease-out); }
   & :is(.bh-job-status, .bh-message-toggle)[aria-expanded="true"] .bh-icon,
   & .bh-widget-toggle[aria-expanded="false"] .bh-icon { rotate: 180deg; }

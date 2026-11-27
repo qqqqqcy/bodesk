@@ -8,7 +8,8 @@ import type {ExternalRecord} from './types.ts';
 export type BoardEdit = {name: string} & (
   {kind: 'company-note'; id: string; note: string} |
   {kind: 'job-note'; id: string; note: string} |
-  {kind: 'status'; id: string; status: string; manualStatus: string | null}
+  {kind: 'status'; id: string; status: string; manualStatus: string | null} |
+  {kind: 'job-delete'; id: string; updatedAt?: number}
 );
 
 export function BoardEditor({target, account, onSave, onClose}: {
@@ -38,14 +39,14 @@ export function BoardEditor({target, account, onSave, onClose}: {
       await onSave({...message, account});
       onClose();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '本地保存失败');
+      setError(failure instanceof Error ? failure.message : target.kind === 'job-delete' ? '删除失败' : '本地保存失败');
       setSaving(false);
     }
   }
 
   function saveNote(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (target.kind === 'status' || saving) return;
+    if (target.kind === 'status' || target.kind === 'job-delete' || saving) return;
     if (note === target.note) {onClose(); return;}
     const fields = {note, expectedNote: target.note};
     void save(target.kind === 'company-note'
@@ -55,11 +56,24 @@ export function BoardEditor({target, account, onSave, onClose}: {
 
   const title = target.kind === 'status' ? (selection ? '确认修改职位状态' : '修改状态')
     : target.kind === 'company-note' ? '公司备注' : 'JD 备注';
+  const dialogHeading = target.kind === 'job-delete'
+    ? '删除「' + target.name + '」的职位记录？'
+    : selection ? title : target.name + ' · ' + title;
 
   return <dialog className="board-edit-dialog" ref={showEditorDialog} aria-labelledby={heading}
     onCancel={event => {event.preventDefault(); cancel();}}>
-    <h2 id={heading}>{selection ? title : target.name + ' · ' + title}</h2>
-    {target.kind === 'status' ? (selection ? <div key="confirm" className="board-edit-step">
+    <h2 id={heading}>{dialogHeading}</h2>
+    {target.kind === 'job-delete' ? <div key="delete" className="board-edit-step">
+      <p>将清除此 JD 的本地备注和状态。后续采集会跳过此 JD。已有聊天和 BOSS 上的收藏会保留。</p>
+      {error && <p className="board-edit-error" role="alert">{error}</p>}
+      <div className="board-edit-actions">
+        <button className="button" type="button" autoFocus disabled={saving} onClick={onClose}>取消</button>
+        <button className="button danger" type="button" aria-busy={saving} disabled={saving}
+          onClick={() => void save({type: 'DELETE_JOB', jobId: target.id, ...(target.updatedAt !== undefined ? {expectedUpdatedAt: target.updatedAt} : {})})}>
+          {saving ? <><span className="bh-spinner"><Icon icon={Loader} /></span>正在删除…</> : '确认删除'}
+        </button>
+      </div>
+    </div> : target.kind === 'status' ? (selection ? <div key="confirm" className="board-edit-step">
       <p>将「{target.name}」的状态从「{target.status}」改为「{statusOptionLabel(selection)}」？</p>
       {error && <p className="board-edit-error" role="alert">{error}</p>}
       <div className="board-edit-actions">

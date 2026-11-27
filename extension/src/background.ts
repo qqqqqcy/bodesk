@@ -159,6 +159,39 @@ async function importBackup(json: unknown){
   await commit(changes);
   return {ok:true,account,added,skipped};
 }
+function filterExportData(account: string, exported: ExternalRecord, jobIds: unknown): ExternalRecord {
+  if (!Array.isArray(jobIds) || jobIds.length > 10000 || jobIds.some(id => !validJobId(account, id))) throw new Error('无效的导出职位列表');
+  const selectedJobs = new Set<string>(jobIds);
+  const jobs = exported.jobs.filter((job: ExternalRecord) => selectedJobs.has(job.id));
+  const keptJobs = new Set<string>(jobs.map((job: ExternalRecord) => job.id));
+  const jobPrefix = key(account, 'job:');
+  const keptJobTokens = new Set<string>(jobs.map((job: ExternalRecord) => job.id.slice(jobPrefix.length)));
+  const referencedConversations = new Set<string>();
+  for (const job of jobs) {
+    if (typeof job.conversationId === 'string' && job.conversationId) referencedConversations.add(job.conversationId);
+    if (Array.isArray(job.conversationIds)) for (const id of job.conversationIds) if (typeof id === 'string' && id) referencedConversations.add(id);
+    if (job.autoContributions && typeof job.autoContributions === 'object') {
+      for (const id of Object.keys(job.autoContributions)) referencedConversations.add(id);
+    }
+  }
+  const conversations = exported.conversations.filter((conversation: ExternalRecord) =>
+    referencedConversations.has(conversation.id) ||
+    (Array.isArray(conversation.jobIds) && conversation.jobIds.some((id: string) => keptJobs.has(id))) ||
+    (typeof conversation.jobId === 'string' && keptJobTokens.has(conversation.jobId))
+  );
+  const keptConversations = new Set<string>(conversations.map((conversation: ExternalRecord) => conversation.id));
+  const referencedCompanies = new Set<string>(
+    [...jobs, ...conversations].map((item: ExternalRecord) => item.companyId).filter((id): id is string => typeof id === 'string' && id.length > 0)
+  );
+  const companies = exported.companies.filter((company: ExternalRecord) => referencedCompanies.has(company.id));
+  const messages = exported.messages.filter((message: ExternalRecord) =>
+    keptConversations.has(message.conversationId) && (!message.jobId || keptJobTokens.has(message.jobId))
+  );
+  const events = exported.events.filter((event: ExternalRecord) =>
+    event.jobId ? keptJobs.has(event.jobId) : Boolean(event.conversationId && keptConversations.has(event.conversationId))
+  );
+  return {...exported, companies, jobs, conversations, messages, events};
+}
 async function resolveAccount(requested?: string | null): Promise<string>{const accounts=await meta('accounts',[]), account=requested===undefined?await currentAccount():requested;if(!accounts.includes(account))throw new Error('未知账号');return account;}
 async function addEvent(account: string,jobId: string,status: string,source: string,evidence: string){await op('events','put',{id:key(account,crypto.randomUUID()),account,jobId,status,source,evidence,time:Date.now()});}
 const tabAccounts=new Map<number | undefined, string>();
@@ -578,9 +611,11 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
       const latestMessages=await latestJobMessages(account,related,allJobs,conversations,{withMessages});
       let current=job?.id||(previewJob&&found?.id)||null;
       if(!jobId&&message.title){const matches=related.filter(j=>j.title===message.title);if(matches.length===1)current=matches[0].id;}
-      const jobs: ExternalRecord[]=related.map(j=>({id:j.id,title:j.title,url:j.url||'',updatedAt:j.updatedAt,favorite:j.favorite===true,...(j.jobClosed===true?{jobClosed:true}:{}),status:j.status||'unknown',label:j.autoLabel||'',manual:!!j.manual,current:j.id===current,note:j.note??'',persisted:true,firstConversationAt:earliest(j.firstConversationAt),...(Array.isArray(j.noteConflicts)&&j.noteConflicts.length?{noteConflicts:j.noteConflicts.filter((n: ExternalRecord)=>typeof n?.text==='string').map((n: ExternalRecord)=>({text:n.text}))}:{})}));
+      const events=related.length?(await op('events','getAll')).filter(e=>e.account===account):[];
+      const relatedWithStatusTimes=jobsWithStatusTimes(related,events);
+      const jobs: ExternalRecord[]=relatedWithStatusTimes.map(j=>({id:j.id,title:j.title,url:j.url||'',updatedAt:j.updatedAt,favorite:j.favorite===true,...(j.jobClosed===true?{jobClosed:true}:{}),status:j.status||'unknown',label:j.autoLabel||'',manual:!!j.manual,...(typeof j.statusAt==='number'&&j.statusAt>0?{statusAt:j.statusAt}:{}),current:j.id===current,note:j.note??'',persisted:true,firstConversationAt:earliest(j.firstConversationAt),...(Array.isArray(j.noteConflicts)&&j.noteConflicts.length?{noteConflicts:j.noteConflicts.filter((n: ExternalRecord)=>typeof n?.text==='string').map((n: ExternalRecord)=>({text:n.text}))}:{})}));
       for (const job of jobs) {
-        if (awaitingContact(job,withMessages)) job.status = 'awaiting_contact';
+        if (awaitingContact(job,withMessages)) {job.status = 'awaiting_contact'; delete job.statusAt;}
         const preview = latestMessages.get(job.id);
         if (preview) {
           const {text,direction,receipt}=preview;
@@ -663,7 +698,7 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
       return {ok:true};
     });
     if(message.type==='SELECT_ACCOUNT')return serialize(async()=>{if(message.account===undefined)throw new Error('请选择账号');const a=await resolveAccount(message.account);await setMeta('activeAccount',a);return {ok:true};});
-    if(message.type==='EXPORT')return serialize(async()=>{const a=await resolveAccount(message.account);await ensureStatusSchema(a);const d=await data(a,true);d.messages=(await op('messages','getAll')).filter(x=>x.account===a);const group=await accountSource(a).catch(()=>null);if(group)d.sourceGroup=group;return {ok:true,data:d};});
+    if(message.type==='EXPORT')return serialize(async()=>{const a=await resolveAccount(message.account);await ensureStatusSchema(a);const d=await data(a,true);d.messages=(await op('messages','getAll')).filter(x=>x.account===a);const group=await accountSource(a).catch(()=>null);if(group)d.sourceGroup=group;const result=message.jobIds===undefined?d:filterExportData(a,d,message.jobIds);return {ok:true,data:result};});
     if(message.type==='IMPORT')return serialize(()=>importBackup(message.json));
     if(message.type==='SET_STATUS')return serialize(async()=>{const a=await resolveAccount(message.account);if(message.status!=='auto'&&!validStatus(message.status))throw new Error('无效状态');await ensureStatusSchema(a);const j=await op('jobs','get',message.jobId);if(!j||j.account!==a||j.deleted)throw new Error('找不到当前账号的 JD');j.manualStatus=message.status==='auto'?null:message.status;j.manual=!!j.manualStatus;j.status=j.manualStatus||j.autoStatus||'unknown';j.updatedAt=Date.now();await op('jobs','put',j);await addEvent(a,j.id,j.status,'manual',message.status==='auto'?'恢复自动状态':'用户修订');return {ok:true};});
     if(['SYNC','STOP_SYNC'].includes(message.type)){
