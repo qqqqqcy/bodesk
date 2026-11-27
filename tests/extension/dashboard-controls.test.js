@@ -96,7 +96,7 @@ test('JD 看板支持独立折叠，组内按状态时间排序', async () => {
   await flush();
   document.getElementById('board-activity-start').value = '19';
   await document.getElementById('board-activity-start').emit('input');
-  assert.equal(document.querySelector('h1').textContent, 'JD 看板');
+  assert.equal(document.querySelector('h1').textContent, 'BoDesk');
   assert.deepEqual(Array.from(document.querySelectorAll('.board-table thead th'), heading => heading.textContent),
     ['职位', '公司', '最后一条对话', '状态', '状态说明与备注', '职位条件']);
   const headings = () => Array.from(document.querySelectorAll('.board-group-toggle'), button => button.textContent);
@@ -106,9 +106,12 @@ test('JD 看板支持独立折叠，组内按状态时间排序', async () => {
   assert.equal(rows.length, 2);
   assert.deepEqual(Array.from(rows[0].cells, cell => cell.textContent).slice(0, 2), ['自动识别已查看', '模拟公司']);
   assert.equal(rows[0].querySelector('.board-message-text').textContent, '下周有空沟通吗？');
-  assert.equal(rows[0].querySelector('.board-message-sender[data-direction="in"]').textContent, '对方');
+  const incoming = rows[0].querySelector('.board-message-sender[data-direction="in"]');
+  assert.equal(incoming.textContent, '对方');
+  assert.equal(incoming.firstChild, incoming.querySelector('.bh-icon'));
   const sender = document.querySelector('.board-message-sender[data-direction="out"]');
-  assert.equal(sender.textContent, '我');
+  assert.equal(sender.textContent, '自己');
+  assert.equal(sender.lastChild, sender.querySelector('.bh-icon'));
   assert.equal(sender.querySelector('svg').getAttribute('aria-hidden'), 'true');
   assert.equal(sender.parentElement.querySelector('[data-receipt="delivered"]').textContent, '已送达');
   assert.equal(rows[0].querySelector('.message-receipt'), null);
@@ -214,10 +217,23 @@ test('JD 看板按真实活动筛选，并保留范围和折叠', async () => {
   assert.equal(slider().value, '7');
   await setRange(19, jobs.length);
   await setRange(1, 3);
-  await setRange(15, 4);
+  const marksAtOne = () => Array.from(document.querySelectorAll('.board-range-mark')).map(node => ({
+    text: node.textContent,
+    selected: node.getAttribute('data-selected'),
+    nearStart: node.getAttribute('data-near-start'),
+    nearEnd: node.getAttribute('data-near-end'),
+  }));
+  assert.equal(marksAtOne()[0].text, '当天');
+  assert.ok(marksAtOne().some(m => m.text === '1 天' && m.selected === 'true' && m.nearStart === 'true'));
   await setRange(16, 5);
-  await setRange(17, 6);
+  assert.ok(marksAtOne().some(m => m.text === '1 个月' && m.selected === 'true'));
+  assert.ok(!marksAtOne().some(m => m.text === '15 天' || m.text === '2 个月'));
+  assert.equal(marksAtOne().at(-1).text, '不限');
   await setRange(18, 7);
+  assert.ok(marksAtOne().some(m => m.text === '3 个月' && m.selected === 'true' && m.nearEnd === 'true'));
+  assert.ok(!marksAtOne().some(m => m.text === '2 个月'));
+  await setRange(15, 4);
+  await setRange(17, 6);
   await setRange(1, 3);
   await document.querySelector('#board-status-passed button').emit('click');
   assert.equal(count(), 2);

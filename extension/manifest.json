@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BoDesk",
-  "version": "0.9.0",
+  "version": "0.9.4",
   "description": "本地优先的 BOSS 求职沟通工作台：在浮窗与 JD 看板中整理公司、职位、沟通状态、收藏与备注，支持聊天记录采集与 JSON 备份。",
   "icons": {
     "16": "assets/icon-16.png",
@@ -13,7 +13,7 @@
   "host_permissions": ["https://www.zhipin.com/*", "http://127.0.0.1:4173/*", "http://localhost:4173/*"],
   "background": {"service_worker": "dist/background.js", "type": "module"},
   "action": {
-    "default_title": "BoDesk · 打开 JD 看板",
+    "default_title": "打开 BoDesk",
     "default_icon": {
       "16": "assets/icon-16.png",
       "32": "assets/icon-32.png",

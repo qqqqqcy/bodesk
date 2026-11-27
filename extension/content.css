@@ -152,8 +152,8 @@
   }
   & .bh-icon-button[data-active="true"] { background: var(--bh-wash); color: var(--bh-accent); }
   & .bh-favorite { display: inline-flex; flex: none; color: var(--bh-accent); vertical-align: middle; }
-  & .bh-job-closed { color: var(--bh-muted); font-weight: 500; }
-  & .bh-job-heading { min-width: 0; font-size: 16px; font-weight: 600; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  & .bh-job-closed { color: var(--bh-muted); font-weight: 400; }
+  & .bh-job-heading { min-width: 0; font-size: 16px; font-weight: 500; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   & .bh-job-heading:has(:focus-visible) { outline: 2px solid var(--bh-accent); outline-offset: 4px; }
   & a.bh-job-title { color: inherit; text-decoration: underline; text-decoration-color: var(--bh-control); text-underline-offset: 4px; }
   & a.bh-job-title:hover { color: var(--bh-accent); text-decoration-color: currentColor; }
@@ -214,29 +214,46 @@
   & .bh-message-preview {
     --bh-message-line: 20px;
     display: grid;
-    grid-template-columns: 36px minmax(0, 1fr);
-    align-items: start;
-    gap: var(--bh-gap);
+    gap: 4px;
     line-height: var(--bh-message-line);
   }
-  & .bh-message-sender { color: var(--bh-muted); font-weight: 600; white-space: nowrap; }
-  & .bh-message-preview:has(.bh-message-toggle) {
-    grid-template-columns: 36px minmax(0, 1fr) var(--bh-control-height);
+  & .bh-message-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: var(--bh-gap);
   }
+  & .bh-message-row:has(.bh-message-toggle) {
+    grid-template-columns: minmax(0, 1fr) var(--bh-control-height);
+  }
+  & .bh-message-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 8px;
+    color: var(--bh-muted);
+  }
+  & .bh-message-sender {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--bh-muted);
+    font-weight: 400;
+    white-space: nowrap;
+  }
+  & .bh-message-out .bh-message-sender { color: var(--bh-accent); }
   & .bh-message-in .bh-message-sender { color: var(--bh-incoming-message); }
   & .bh-message-body[data-expanded="false"] { max-height: calc(2 * var(--bh-message-line)); overflow: hidden; }
   & .bh-message-body[data-expanded="true"] { animation: bh-fade-in var(--bh-dur-fast) var(--bh-ease-out); }
   & .bh-message-text { display: block; overflow-wrap: anywhere; white-space: pre-wrap; }
-  & .bh-message-preview > .message-receipt {
-    grid-column: 2;
+  & .bh-message-meta .message-receipt {
     display: inline-flex;
     align-items: center;
-    justify-self: start;
     gap: 4px;
     color: var(--bh-muted);
     white-space: nowrap;
   }
-  & .bh-message-preview > .message-receipt[data-receipt="read"] { color: var(--bh-accent); }
+  & .bh-message-meta .message-receipt[data-receipt="read"] { color: var(--bh-accent); }
   & .bh-message-toggle {
     align-self: center;
     color: var(--bh-accent);

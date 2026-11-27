@@ -10,7 +10,7 @@ import {resumeEventStage} from './core.ts';
 import {NoteIcon} from './record-editing.tsx';
 import {jobURL, normalizeStatus, statusLabel} from './status.ts';
 import type {DatabaseSnapshot, ExternalRecord, TimedHumanMessagePreview} from './types.ts';
-import {MessageReceipt} from './message-receipt.tsx';
+import {MessageReceipt, messageSenders} from './message-receipt.tsx';
 import {DashboardSelect} from './dashboard-select.tsx';
 import {withinActivityWindow} from './activity-window.ts';
 import type {ActivityWindow} from './activity-window.ts';
@@ -67,10 +67,9 @@ interface BoardPreferences {
 const today = 0;
 const ranges = ['当天', ...Array.from({length: 15}, (_, index) => (index + 1) + ' 天'), '1 个月', '2 个月', '3 个月', '不限'];
 const allTime = ranges.length - 1;
-const rangeMarks = [today, 1, 5, 10, 15, 16, 17, 18, allTime];
+const baseRangeMarks = [today, 5, 10, 15, 17, allTime];
 const preferencesKey = 'boss-helper.jd-board.preferences';
 const defaultPreferences: BoardPreferences = {range: 7, rangeEnd: today, collapsed: [], groupBy: 'status', filters: []};
-const senders = {in: '对方', out: '我', unknown: '未知'};
 
 function readPreferences(fallback = defaultPreferences): BoardPreferences {
   try {
@@ -198,10 +197,22 @@ export function ActivityRange({start, end, now, onChange}: {start: number; end: 
     }
   }
 
+  const visibleMarks = [...new Set([
+    ...baseRangeMarks.filter(step =>
+      step === today || step === allTime ||
+      (Math.abs(step - startStep) > 1 && Math.abs(step - endStep) > 1)
+    ),
+    startStep,
+    endStep,
+  ])].sort((a, b) => a - b);
+
   return <div className="board-range" role="group" aria-label="活动时间">
     <div className="board-range-scale" aria-hidden="true">
-      {rangeMarks.map(step => <span key={step} className="board-range-mark" data-selected={step === startStep || step === endStep}
-        data-wide-only={step === 1 || (step > 15 && step < allTime)} style={{insetInlineStart: rangePosition(step)}}>
+      {visibleMarks.map(step => <span key={step} className="board-range-mark" data-selected={step === startStep || step === endStep}
+        data-wide-only={step === 17 && step !== startStep && step !== endStep}
+        data-near-start={step === today + 1 || undefined}
+        data-near-end={step === allTime - 1 || undefined}
+        style={{insetInlineStart: rangePosition(step)}}>
         {ranges[step]}
       </span>)}
     </div>
@@ -325,8 +336,9 @@ const boardColumns = (edit: (target: BoardEdit) => void, busy: boolean): ColumnD
         <p className="board-message-text" title={message.text}>{message.text}</p>
         <p className="board-message-meta">
           <span className="board-message-sender" data-direction={message.direction} title={message.direction === 'unknown' ? '发送方向未知' : undefined}>
-            {message.direction !== 'unknown' && <Icon icon={message.direction === 'in' ? ArrowLeft : ArrowRight} />}
-            {senders[message.direction]}
+            {message.direction === 'in' && <Icon icon={ArrowLeft} />}
+            {messageSenders[message.direction]}
+            {message.direction === 'out' && <Icon icon={ArrowRight} />}
           </span>
           <MessageReceipt direction={message.direction} receipt={message.receipt} />
           <BoardTime value={message.time} title="对话消息时间" />

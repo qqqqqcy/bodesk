@@ -246,7 +246,7 @@ function Dashboard() {
 
   return <main className="shell">
     <header className="page-header">
-      <h1 id="dashboard-title">JD 看板</h1>
+      <h1 id="dashboard-title">BoDesk</h1>
       <div className="page-actions">
         {accountPicker}
         <div className="file-actions">

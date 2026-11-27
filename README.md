@@ -3,7 +3,7 @@
   <h1>BoDesk</h1>
   <p><strong>BOSS直聘个人本地求职工作台</strong> · 沟通页轻量悬浮记录，独立看板统筹全流程进度与历史消息</p>
   <p>
-    <img src="https://img.shields.io/badge/version-0.9.0-365d80?style=flat-square" alt="Version 0.9.0" />
+    <img src="https://img.shields.io/badge/version-0.9.2-365d80?style=flat-square" alt="Version 0.9.2" />
     <img src="https://img.shields.io/badge/Manifest-V3-181818?style=flat-square" alt="Manifest V3" />
     <img src="https://img.shields.io/badge/storage-Local%20IndexedDB-2c6e49?style=flat-square" alt="Local-First IndexedDB" />
     <img src="https://img.shields.io/badge/browser-Chrome%20%2F%20Edge-4a5568?style=flat-square" alt="Chrome and Edge" />
@@ -20,7 +20,7 @@
 </div>
 
 <p align="center">
-  <img src="docs/media/dashboard-overview.png" alt="BoDesk JD 看板全览：按状态分组、活动时间滑块、对方消息高亮与多维备注" width="100%" />
+  <img src="docs/media/dashboard-overview.png" alt="BoDesk 看板全览：按状态分组、活动时间滑块、对方与我方对话状态高亮与多维备注" width="100%" />
 </p>
 
 > [!NOTE]
@@ -62,12 +62,12 @@
 
 ---
 
-### 2. 独立 JD 看板与状态流转
+### 2. 独立全屏看板与状态流转
 
-点击浮窗底部的「**JD 看板**」或浏览器工具栏中的 BoDesk 图标，打开全屏工作台统一管理全部沟通中的机会：
+点击浮窗底部的「**BoDesk**」或浏览器工具栏中的 BoDesk 图标，打开全屏工作台统一管理全部沟通中的机会：
 
 <p align="center">
-  <img src="docs/media/dashboard-demo.gif" alt="BoDesk JD 看板交互动图：展开高级设置抽屉、切换按状态/公司分组与修订职位状态" width="100%" />
+  <img src="docs/media/dashboard-demo.gif" alt="BoDesk 看板交互动图：展开高级设置抽屉、切换按状态/公司分组与修订职位状态" width="100%" />
 </p>
 
 - **时间窗精确回溯**：通过顶部双滑块选定近期活动范围，按需触发只读增量历史补全。
@@ -78,7 +78,7 @@
 
 ## 核心特性
 
-- **双入口协同**：在沟通页与职位详情页右侧原位看状态、写备注；在独立 JD 看板总览全局与多维筛选。
+- **双入口协同**：在沟通页与职位详情页右侧原位看状态、写备注；在独立看板总览全局与多维筛选。
 - **自动推导 + 人工兜底**：结合消息方向、简历事件（请求 / 已发送 / 已查看 / 发送失败 / 拒绝）与面试邀约卡片自动计算状态，人工修订支持确认弹窗并保留来源标识，可随时切回「跟随自动判断」。
 - **收藏与失效感知**：识别页面职位收藏、公司关注与已关闭/下架岗位，避免在已关闭 JD 上浪费跟进精力。
 - **多账号与环境严格隔离**：按账号维度与站点来源分域建库；访问本地 `mock/` 实验室时自动归入模拟命名空间，真实账号数据保持完全干净独立。
@@ -113,7 +113,7 @@ npm run build
 ### 3. 开始追踪
 
 1. 登录 BOSS直聘并打开任意「沟通」或「职位详情」页面，右下角即可看到 **BoDesk** 浮窗。
-2. 正常浏览会话即可自动积累状态记录；点击浮窗底部的 **JD 看板**（或工具栏 BoDesk 图标），可展开活动时间滑块、组合筛选与全量同步设置。
+2. 正常浏览会话即可自动积累状态记录；点击浮窗底部的 **BoDesk** 按钮（或工具栏 BoDesk 图标），可展开活动时间滑块、组合筛选与全量同步设置。
 
 ---
 
@@ -154,7 +154,7 @@ BoDesk 在设计上遵循最小权限与本地优先原则，具体数据与网�
 <details>
 <summary><strong>如何导出数据或迁移到另一台电脑？</strong></summary>
 
-在 JD 看板右上角点击 **导出 JSON** 即可保存当前账号全部职位、公司、对话与备注快照；在新设备安装 BoDesk 后点击 **导入 JSON** 选择备份文件即可无损恢复。
+在 BoDesk 看板右上角点击 **导出 JSON** 即可保存当前账号全部职位、公司、对话与备注快照；在新设备安装 BoDesk 后点击 **导入 JSON** 选择备份文件即可无损恢复。
 
 </details>
 

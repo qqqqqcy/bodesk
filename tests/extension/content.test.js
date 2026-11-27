@@ -34,7 +34,7 @@ test('浮窗打开当前账号的合并看板', async () => {
   });
   await h.deliver(snapshot());
   const buttons = all(h.widget(), 'bh-overview');
-  assert.deepEqual(buttons.map(button => button.textContent), ['JD 看板']);
+  assert.deepEqual(buttons.map(button => button.textContent), ['BoDesk']);
   for (const button of buttons) await button.emit('click');
   assert.deepEqual(opened, [
     {type: 'OPEN_DASHBOARD', account: 'a'},
@@ -134,9 +134,16 @@ test('浮窗按发送方显示人工消息预览并保留完整的纯文本', as
   const [outgoing, incoming] = all(h.widget(),'bh-message-preview');
   assert.ok(outgoing.classList.contains('bh-message-out'));
   assert.ok(incoming.classList.contains('bh-message-in'));
-  assert.equal(find(outgoing,'bh-message-sender').textContent,'我');
-  assert.equal(find(incoming,'bh-message-sender').textContent,'对方');
-  assert.equal(outgoing.querySelector('[data-receipt="read"]').textContent,'已读');
+  assert.equal(outgoing.getAttribute('aria-label'), '最后一条对话');
+  const outgoingSender = find(outgoing, 'bh-message-sender');
+  const incomingSender = find(incoming, 'bh-message-sender');
+  assert.equal(outgoingSender.textContent, '自己');
+  assert.equal(outgoingSender.lastChild, outgoingSender.querySelector('.bh-icon'));
+  assert.equal(incomingSender.textContent, '对方');
+  assert.equal(incomingSender.firstChild, incomingSender.querySelector('.bh-icon'));
+  const outgoingReceipt = outgoing.querySelector('[data-receipt="read"]');
+  assert.equal(outgoingReceipt.textContent, '已读');
+  assert.equal(outgoingSender.parentElement, outgoingReceipt.parentElement);
   assert.equal(incoming.querySelector('.message-receipt'),null);
   assert.equal(find(outgoing,'bh-message-text').textContent,longMessage);
   assert.equal(outgoing.querySelector('img'), null);

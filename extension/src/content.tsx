@@ -1,8 +1,8 @@
 import {useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore} from 'react';
 import {createRoot} from 'react-dom/client';
-import {ArrowUpRight, ChevronDown, Loader, More, Trash} from 'reicon';
+import {ArrowLeft, ArrowRight, ArrowUpRight, ChevronDown, Loader, More, Trash} from 'reicon';
 import {FavoriteMark, Icon} from './icon.tsx';
-import {MessageReceipt} from './message-receipt.tsx';
+import {MessageReceipt, messageSenders} from './message-receipt.tsx';
 import {NoteIcon, showEditorDialog, statusOptionLabel, StatusOptions} from './record-editing.tsx';
 import type {ExternalRecord, HumanMessagePreview, WidgetContext, WidgetData, WidgetJob} from './types.ts';
 import {jobURL, normalizeStatus, statusLabel} from './status.ts';
@@ -237,7 +237,7 @@ function LatestMessage({text, direction, receipt}: HumanMessagePreview) {
   const message = useRef<HTMLSpanElement>(null);
   const messageId = useId();
   const expanded = expandedText === text;
-  const sender = direction === 'out' ? '我' : direction === 'in' ? '对方' : '未知';
+  const sender = messageSenders[direction];
 
   useLayoutEffect(() => {
     const element = message.current;
@@ -255,13 +255,21 @@ function LatestMessage({text, direction, receipt}: HumanMessagePreview) {
     return () => observer.disconnect();
   }, [text]);
 
-  return <div className={'bh-message-preview bh-message-' + direction} role="group" aria-label="最近一条对话">
-    <span className="bh-message-sender" title={direction === 'unknown' ? '发送方向未知' : undefined}>{sender}</span>
-    <div id={messageId} className="bh-message-body" data-expanded={expanded}>
-      <span className="bh-message-text" ref={message}>{text}</span>
+  return <div className={'bh-message-preview bh-message-' + direction} role="group" aria-label="最后一条对话">
+    <div className="bh-message-row">
+      <div id={messageId} className="bh-message-body" data-expanded={expanded}>
+        <span className="bh-message-text" ref={message}>{text}</span>
+      </div>
+      {overflows && <button className="bh-icon-button bh-message-toggle" type="button" aria-label={expanded ? '收起消息' : '展开消息'} aria-controls={messageId} aria-expanded={expanded} onClick={() => setExpandedText(expanded ? null : text)}><Icon icon={ChevronDown} /></button>}
     </div>
-    {overflows && <button className="bh-icon-button bh-message-toggle" type="button" aria-label={expanded ? '收起消息' : '展开消息'} aria-controls={messageId} aria-expanded={expanded} onClick={() => setExpandedText(expanded ? null : text)}><Icon icon={ChevronDown} /></button>}
-    <MessageReceipt direction={direction} receipt={receipt} />
+    <div className="bh-message-meta">
+      <span className="bh-message-sender" data-direction={direction} title={direction === 'unknown' ? '发送方向未知' : undefined}>
+        {direction === 'in' && <Icon icon={ArrowLeft} />}
+        {sender}
+        {direction === 'out' && <Icon icon={ArrowRight} />}
+      </span>
+      <MessageReceipt direction={direction} receipt={receipt} />
+    </div>
   </div>;
 }
 
@@ -312,7 +320,7 @@ function Job({job, context}: {job: WidgetJob; context: WidgetContext}) {
   const statusText = status + (job.manual ? '（手动）' : '');
   const statusOpen = view.editor === statusKey;
   const canEditStatus = !!job.id;
-  const noteLabel = job.note ? '编辑备注' : '添加备注';
+  const noteLabel = job.note ? '编辑 JD 备注' : '添加 JD 备注';
   const openNote = () => openNoteEditor('job-note', job.id, job.note || '');
   function remove() {
     if (view.editor) {showNotice('请先保存或取消正在编辑的内容'); return;}
@@ -324,7 +332,7 @@ function Job({job, context}: {job: WidgetJob; context: WidgetContext}) {
       {job.favorite && <FavoriteMark kind="job" />}
       <div className="bh-heading-actions">
         <button className="bh-icon-button bh-job-note-edit" type="button" disabled={!job.id} aria-label={noteLabel + '：' + (job.title || '待识别 JD')} title={noteLabel} data-active={view.editor === noteKey} onClick={openNote}><NoteIcon hasNote={!!job.note} /></button>
-        <button className="bh-icon-button bh-job-delete" type="button" disabled={!job.id || !job.persisted} aria-label={'删除 ' + (job.title || '未命名职位')} title="删除职位记录" aria-haspopup="dialog" onClick={remove}>
+        <button className="bh-icon-button bh-job-delete" type="button" disabled={!job.id || !job.persisted} aria-label={'删除 ' + (job.title || '待识别 JD')} title="删除职位记录" aria-haspopup="dialog" onClick={remove}>
           <Icon icon={Trash} />
         </button>
       </div>
@@ -333,7 +341,7 @@ function Job({job, context}: {job: WidgetJob; context: WidgetContext}) {
     {job.note && <p className="bh-note-text">{job.note}</p>}
     <div className="bh-job-status-row">
       <button className="bh-job-status" type="button" disabled={!canEditStatus} aria-haspopup={canEditStatus ? 'dialog' : undefined}
-        aria-label={canEditStatus ? statusText + '，修改' + (job.title || '当前职位') + '的状态' : undefined}
+        aria-label={canEditStatus ? statusText + '，修改 ' + (job.title || '当前职位') + ' 的状态' : undefined}
         aria-expanded={canEditStatus ? statusOpen : undefined} aria-controls={statusOpen ? statusPickerId : undefined}
         onClick={() => {if (statusOpen) void closeEditor(); else activateEditor(statusKey);}}
         onKeyDown={event => {if (statusOpen && event.key === 'Escape') {event.stopPropagation(); void closeEditor();}}}>{statusText}{canEditStatus && <Icon icon={ChevronDown} />}</button>
@@ -342,7 +350,7 @@ function Job({job, context}: {job: WidgetJob; context: WidgetContext}) {
     {job.latestMessage && <LatestMessage {...job.latestMessage} />}
     {!!job.noteConflicts?.length && <details className="bh-note-history"><summary>合并前的备注（{job.noteConflicts.length}）</summary>{job.noteConflicts.map((note, index) => <p className="bh-note-text" key={index}>{note.text}</p>)}</details>}
     {view.editor === noteKey && <NoteEditor key={noteKey + ':' + view.session} kind="job-note" id={job.id} title={job.title} />}
-    {view.editor === deleteKey && <DeleteLayer name={job.title || '未命名职位'} editor={deleteKey} message={{type: 'DELETE_JOB', account: context.account, jobId: job.id, expectedUpdatedAt: job.updatedAt}} draftKeys={[noteKey]} />}
+    {view.editor === deleteKey && <DeleteLayer name={job.title || '待识别 JD'} editor={deleteKey} message={{type: 'DELETE_JOB', account: context.account, jobId: job.id, expectedUpdatedAt: job.updatedAt}} draftKeys={[noteKey]} />}
   </article>;
 }
 
@@ -380,7 +388,7 @@ function Widget() {
     setOpeningDashboard(true);
     try {
       const result = await chrome.runtime.sendMessage({type: 'OPEN_DASHBOARD', account: context?.account || lastAccount});
-      if (!result?.ok) showNotice(result?.error || '打开 JD 看板失败');
+      if (!result?.ok) showNotice(result?.error || '打开 BoDesk 失败');
     } catch {showNotice('扩展连接中断，请刷新页面');}
     finally {setOpeningDashboard(false);}
   }
@@ -415,7 +423,7 @@ function Widget() {
       </div>
       <div className="bh-controls">
         <button className="bh-overview" type="button" aria-busy={openingDashboard} disabled={openingDashboard} onClick={() => void openDashboard()}>
-          JD 看板{openingDashboard ? <span className="bh-spinner"><Icon icon={Loader} /></span> : <Icon icon={ArrowUpRight} />}
+          BoDesk{openingDashboard ? <span className="bh-spinner"><Icon icon={Loader} /></span> : <Icon icon={ArrowUpRight} />}
         </button>
       </div>
     </div>
