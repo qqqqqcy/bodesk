@@ -93,26 +93,24 @@
 ## 3 步安装使用
 
 > [!IMPORTANT]
-> 目前以源码本地构建后通过 Chrome / Edge **加载已解压扩展程序** 方式安装使用。加载时请选择仓库根目录下的 **`extension/`** 目录，**不要**选择 `extension/dist/`（`manifest.json` 位于 `extension/` 内）。
+> 从 [GitHub Releases](https://github.com/qqqqqcy/bodesk/releases/latest) 下载 ZIP 并解压。`main` 更新后，GitHub Actions 会在测试通过时发布安装包，标签包含扩展版本和提交号。
 
-### 环境要求
+### 1. 下载并解压扩展
 
-- Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`
-
-### 1. 克隆仓库并构建扩展
+从 Release 的 Assets 下载 `bodesk-*.zip`。需要从源码安装时，使用 Node.js 22.22.2+（22.x）、24.15+（24.x）或 26+，并运行以下命令。
 
 ```bash
 git clone https://github.com/qqqqqcy/bodesk.git
 cd bodesk
-npm install
-npm run build
+npm ci
+npm run build:extension
 ```
 
 ### 2. 加载到 Chrome / Edge
 
 1. 在浏览器地址栏打开 `chrome://extensions`（Edge 请打开 `edge://extensions`）。
 2. 开启右上角的 **开发者模式**。
-3. 点击 **加载已解压的扩展程序**，选择本项目中的 **`extension/`** 文件夹。
+3. 点击 **加载已解压的扩展程序**，选择包含 `manifest.json` 的解压目录。从源码构建时选择仓库里的 `extension/`。
 
 ### 3. 开始追踪
 

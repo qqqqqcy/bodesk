@@ -1,0 +1,61 @@
+name: Release BoDesk
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.15.0'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Package extension
+        id: package
+        shell: bash
+        run: |
+          version=$(node -p 'require("./extension/manifest.json").version')
+          tag="v${version}-${GITHUB_SHA:0:12}"
+          archive="bodesk-${tag#v}.zip"
+          (cd extension && zip -q -r "$RUNNER_TEMP/$archive" manifest.json assets dist)
+          unzip -tq "$RUNNER_TEMP/$archive"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "archive=$RUNNER_TEMP/$archive" >> "$GITHUB_OUTPUT"
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.package.outputs.tag }}
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: |
+          head_sha=$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq '.object.sha')
+          if [[ "$head_sha" != "$GITHUB_SHA" ]]; then
+            echo "main has advanced to $head_sha. Skipping this build."
+            exit 0
+          fi
+
+          if release=$(gh release view "$TAG" --json isDraft --jq '.isDraft'); then
+            if [[ "$release" == false ]]; then exit 0; fi
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" --draft --title "BoDesk $TAG" --notes "main 提交 $GITHUB_SHA。下载 ZIP 并解压，然后在 Chrome 或 Edge 的扩展管理页加载包含 manifest.json 的目录。"
+          fi
+          gh release upload "$TAG" "$ARCHIVE" --clobber
+          gh release edit "$TAG" --draft=false --latest
