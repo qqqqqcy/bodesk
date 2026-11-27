@@ -47,6 +47,24 @@ test('看板仅在不限时展示无状态时间的收藏职位，公司和职�
   assert.equal(document.getElementById('board-availability'),null);
 });
 
+test('同一份看板数据随当前时间纳入新活动，并在跨日后更新行内日期', async () => {
+  const start = new Date(2025, 4, 10, 23, 58).getTime();
+  let now = start;
+  const jobs = [{id: 'first', title: '已有职位', statusAt: start}, {id: 'later', title: '稍后出现', statusAt: start + 60000}];
+  const {document} = browserHarness(source, async () => ({ok: true, data: {...snapshot(), jobs}}), {
+    ...options, setup: window => {window.Date.now = () => now;},
+  });
+  await flush();
+  const dates = () => [...document.querySelectorAll('.board-job-row time')].map(time => time.textContent);
+  assert.deepEqual(dates(), ['当天']);
+  now += 60000;
+  await document.querySelector('.sync-details-toggle').emit('click');
+  assert.deepEqual(dates(), ['当天', '当天']);
+  now += 60000;
+  await document.querySelector('.sync-details-toggle').emit('click');
+  assert.deepEqual(dates(), ['1 天内', '1 天内']);
+});
+
 test('合并页读取指定账号，同屏展示看板、采集与备份控件', async () => {
   const sent = [];
   const harness = browserHarness(source, async message => {sent.push(message); return {ok: true, data: {...snapshot(), accountNames: {a:'模拟登录名'}}};}, options);

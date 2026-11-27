@@ -1,7 +1,7 @@
-import {useEffect, useMemo, useRef, useState} from 'react';
+import {memo, useEffect, useMemo, useRef, useState} from 'react';
 import type {CSSProperties, PointerEvent} from 'react';
-import {flexRender, getCoreRowModel, getFilteredRowModel, getGroupedRowModel, getSortedRowModel, useReactTable} from '@tanstack/react-table';
-import type {ColumnDef, TableState} from '@tanstack/react-table';
+import {flexRender, getCoreRowModel, getGroupedRowModel, getSortedRowModel, useReactTable} from '@tanstack/react-table';
+import type {Cell, ColumnDef, TableState} from '@tanstack/react-table';
 import {ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Loader, Trash} from 'reicon';
 import {FavoriteMark, Icon} from './icon.tsx';
 import {BoardEditor} from './board-editor.tsx';
@@ -260,11 +260,11 @@ const timestamp = (value: unknown) => typeof value === 'number' && value > 0 ? n
 const dateFormat = new Intl.DateTimeFormat('zh-CN', {year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'});
 export const formatBoardDateTime = (value: number) => value > 0 ? dateFormat.format(new Date(value)) : '';
 
-function BoardTime({value, title}: {value: number; title?: string}) {
+function BoardTime({value, title, today}: {value: number; title?: string; today: number}) {
   if (!value) return <span className="board-missing">—</span>;
   const date = new Date(value);
   const exact = dateFormat.format(date);
-  const label = formatRelativeStatusDate(value) || exact;
+  const label = formatRelativeStatusDate(value, today) || exact;
   return <time className="board-time" dateTime={date.toISOString()} title={title ? title + '：' + exact : exact}>{label}</time>;
 }
 
@@ -336,7 +336,7 @@ function BoardFilters({filters, onChange}: {filters: BoardFilter[]; onChange: (f
   </div>;
 }
 
-const boardColumns = (edit: (target: BoardEdit) => void, busy: boolean): ColumnDef<BoardJob>[] => [
+const boardColumns = (edit: (target: BoardEdit) => void, busy: boolean, today: number): ColumnDef<BoardJob>[] => [
   {
     accessorKey: 'title', header: columnLabels.title,
     cell: ({row}) => {
@@ -385,7 +385,7 @@ const boardColumns = (edit: (target: BoardEdit) => void, busy: boolean): ColumnD
             {message.direction === 'out' && <Icon icon={ArrowRight} />}
           </span>
           <MessageReceipt direction={message.direction} receipt={message.receipt} />
-          <BoardTime value={message.time} title="对话消息时间" />
+          <BoardTime value={message.time} today={today} title="对话消息时间" />
           {message.fromList && <span>聊天摘要</span>}
         </p>
       </>;
@@ -400,7 +400,7 @@ const boardColumns = (edit: (target: BoardEdit) => void, busy: boolean): ColumnD
         <button className="board-status-edit" type="button" aria-haspopup="dialog"
           aria-label={statusText + '，修改 ' + title + ' 的状态'} disabled={busy}
           onClick={() => edit({kind: 'status', id, name: title, status: statusText, manualStatus})}><span>{statusText}</span><Icon icon={ChevronDown} /></button>
-        <BoardTime value={statusAt} title={manual ? '手动设置当前状态的时间' : '判断当前状态所依据的消息时间'} />
+        <BoardTime value={statusAt} today={today} title={manual ? '手动设置当前状态的时间' : '判断当前状态所依据的消息时间'} />
       </>;
     },
   },
@@ -424,11 +424,6 @@ const boardColumns = (edit: (target: BoardEdit) => void, busy: boolean): ColumnD
       ? row.original.conditions.map((condition, index) => <span className="board-condition" key={index}>{condition}{index + 1 < row.original.conditions.length && ' · '}</span>)
       : <span className="board-missing">—</span>,
   },
-  {
-    id: 'activityAt',
-    accessorFn: jobActivityTimes,
-    filterFn: (row, _columnId, window: ActivityWindow) => matchesActivityWindow(row.original, window),
-  },
   {accessorKey: 'statusAt', sortingFn: 'basic'},
   {
     id: 'favorite',
@@ -437,7 +432,7 @@ const boardColumns = (edit: (target: BoardEdit) => void, busy: boolean): ColumnD
   },
 ];
 const boardState: Pick<TableState, 'columnVisibility'> = {
-  columnVisibility: {statusAt: false, activityAt: false, favorite: false},
+  columnVisibility: {statusAt: false, favorite: false},
 };
 
 function jobActivityTimes(job: BoardJob) {
@@ -476,7 +471,7 @@ export function buildBoardJobs(snapshot: DatabaseSnapshot | null): BoardJob[] {
       url: jobURL(stringValue(job.url)),
       statusAt: timestamp(job.statusAt),
       statusActivityAt: timestamp(job.statusActivityAt),
-      messageActivity: job.messageActivity ?? [],
+      messageActivity: Array.isArray(job.messageActivity) ? job.messageActivity : [],
       manual,
       manualStatus: manual ? normalizeStatus(manualStatus || status) : null,
       statusText: resumeLabel || statusLabel(status),
@@ -487,7 +482,21 @@ export function buildBoardJobs(snapshot: DatabaseSnapshot | null): BoardJob[] {
 }
 
 export function filterBoardJobs(jobs: BoardJob[], filters: BoardFilter[], window: ActivityWindow | null) {
+  if (!filters.length && !window) return jobs;
   return jobs.filter(job => filters.every(filter => matchesBoardFilter(job, filter)) && matchesActivityWindow(job, window));
+}
+
+export function useFilteredBoardJobs(jobs: BoardJob[], filters: BoardFilter[], window: ActivityWindow | null) {
+  const lastActivity = useMemo(() => {
+    let latest = 0;
+    for (const job of jobs) {
+      for (const time of jobActivityTimes(job)) if (time > latest) latest = time;
+    }
+    return latest;
+  }, [jobs]);
+  const start = window?.start ?? null;
+  const end = window ? Math.min(window.end, lastActivity) : null;
+  return useMemo(() => filterBoardJobs(jobs, filters, end === null ? null : {start, end}), [jobs, filters, start, end]);
 }
 
 export interface BoardJobGroup {
@@ -538,21 +547,28 @@ export function groupBoardJobs(jobs: BoardJob[], groupBy: BoardColumn): BoardJob
   return groups;
 }
 
-export function JobBoard({snapshot, busy, onSave, activityWindow, now, board}: {snapshot: DatabaseSnapshot | null; busy: boolean; onSave: (message: ExternalRecord) => Promise<void>; activityWindow: ActivityWindow | null; now: number; board: ReturnType<typeof useBoardPreferences>}) {
+const BoardRow = memo(function BoardRow({cells}: {cells: Cell<BoardJob, unknown>[]}) {
+  return <tr className="board-job-row">{cells.map(cell => {
+    const content = flexRender(cell.column.columnDef.cell, cell.getContext());
+    const className = 'board-col-' + cell.column.id;
+    return cell.column.id === 'title'
+      ? <th key={cell.id} scope="row" className={className}>{content}</th>
+      : <td key={cell.id} className={className}>{content}</td>;
+  })}</tr>;
+});
+
+export function JobBoard({snapshot, busy, onSave, shownJobs, total, now, board}: {snapshot: DatabaseSnapshot | null; busy: boolean; onSave: (message: ExternalRecord) => Promise<void>; shownJobs: BoardJob[]; total: number; now: number; board: ReturnType<typeof useBoardPreferences>}) {
   const {preferences, savePreferences} = board;
   const [editor, setEditor] = useState<BoardEdit | null>(null);
-  const columns = useMemo(() => boardColumns(setEditor, busy), [busy]);
-  const columnFilters = useMemo(() => activityWindow ? [{id: 'activityAt', value: activityWindow}] : [], [activityWindow]);
-  const data = useMemo(() => buildBoardJobs(snapshot), [snapshot]);
+  const day = new Date(now).setHours(0, 0, 0, 0);
+  const columns = useMemo(() => boardColumns(setEditor, busy, day), [busy, day]);
 
   const {groupBy, filters} = preferences;
-  const shownJobs = useMemo(() => data.filter(job => filters.every(filter => matchesBoardFilter(job, filter))), [data, filters]);
   const tableState = useMemo(() => ({
     ...boardState,
-    columnFilters,
     grouping: [groupBy],
     sorting: [{id: groupBy, desc: false}, {id: 'statusAt', desc: true}],
-  }), [columnFilters, groupBy]);
+  }), [groupBy]);
   const table = useReactTable({
     data: shownJobs,
     columns,
@@ -562,16 +578,16 @@ export function JobBoard({snapshot, busy, onSave, activityWindow, now, board}: {
     groupedColumnMode: false,
     getRowId: job => job.id,
     getCoreRowModel: getCoreRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
     getGroupedRowModel: getGroupedRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });
   const groups = table.getRowModel().rows;
   const headers = table.getHeaderGroups()[0].headers;
-  const count = table.getFilteredRowModel().rows.length;
-
-  const representedCompanies = new Set(table.getFilteredRowModel().rows.map(row => row.original.companyId));
-  const favoriteCompanies = snapshot?.companies.filter(company => company.favorite === true && !representedCompanies.has(company.id)) ?? [];
+  const count = shownJobs.length;
+  const favoriteCompanies = useMemo(() => {
+    const represented = new Set(shownJobs.map(job => job.companyId));
+    return snapshot?.companies.filter(company => company.favorite === true && !represented.has(company.id)) ?? [];
+  }, [shownJobs, snapshot]);
 
   return <section className="job-board" aria-labelledby="dashboard-title" aria-busy={busy}>
     <div className="board-panel">
@@ -584,7 +600,7 @@ export function JobBoard({snapshot, busy, onSave, activityWindow, now, board}: {
         <BoardFilters filters={filters} onChange={filters => savePreferences(current => ({...current, filters}))} />
         <div className="board-summary">
           <output htmlFor="board-activity-start board-activity-end">活动时间 {activityDateLabel(preferences.range, now)} 至 {activityDateLabel(preferences.rangeEnd, now)}</output>
-          <span>{count === data.length ? count : count + ' / ' + data.length} 个 JD，{groups.length} 组</span>
+          <span>{count === total ? count : count + ' / ' + total} 个 JD，{groups.length} 组</span>
         </div>
       </div>
       {groups.length ?
@@ -621,15 +637,7 @@ export function JobBoard({snapshot, busy, onSave, activityWindow, now, board}: {
                     </div>
                   </th>
                 </tr>
-                {expanded && group.subRows.map(row => <tr key={row.id} className="board-job-row">
-                  {row.getVisibleCells().map(cell => {
-                    const content = flexRender(cell.column.columnDef.cell, cell.getContext());
-                    const className = 'board-col-' + cell.column.id;
-                    return cell.column.id === 'title'
-                      ? <th key={cell.id} scope="row" className={className}>{content}</th>
-                      : <td key={cell.id} className={className}>{content}</td>;
-                  })}
-                </tr>)}
+                {expanded && group.subRows.map(row => <BoardRow key={row.id} cells={row.getVisibleCells()} />)}
               </tbody>;
             })}
           </table>
@@ -637,7 +645,7 @@ export function JobBoard({snapshot, busy, onSave, activityWindow, now, board}: {
       : <div className="board-empty-wrap">
           <p className="board-empty" data-loading={busy || undefined}>
             {busy && <span className="bh-spinner"><Icon icon={Loader} /></span>}
-            {busy ? '正在读取 JD…' : data.length ? '当前筛选下暂无 JD' : snapshot?.account ? '当前账号暂无 JD' : snapshot ? '暂无可用账号' : '暂时无法读取 JD'}
+            {busy ? '正在读取 JD…' : total ? '当前筛选下暂无 JD' : snapshot?.account ? '当前账号暂无 JD' : snapshot ? '暂无可用账号' : '暂时无法读取 JD'}
           </p>
           {busy && <div className="board-skeleton bh-skeleton-list" aria-hidden="true">
             <span className="bh-skeleton-bar" style={{width: '100%'}} />

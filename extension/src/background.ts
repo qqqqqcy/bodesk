@@ -8,18 +8,41 @@ import {syncInterval, syncIntervalSeconds, validSyncInterval} from './sync-inter
 import {validActivityWindow, withinActivityWindow} from './activity-window.ts';
 import {readBackup} from './backup.ts';
 import {isCompanyJobsPath} from './company-jobs.ts';
-const DB_NAME='boss-local-helper', DB_VERSION=2, STATUS_SCHEMA=7;
+const DB_NAME='boss-local-helper', DB_VERSION=3, STATUS_SCHEMA=7;
 const SITE_ORIGINS=['https://www.zhipin.com','http://127.0.0.1:4173','http://localhost:4173'];
 const siteOrigin=(value?: string)=>{try{const url=new URL(value || '');return SITE_ORIGINS.includes(url.origin)?url.origin:null;}catch{return null;}};
 const sourceGroup=(value?: string)=>{const origin=siteOrigin(value);return !origin?null:origin===SITE_ORIGINS[0]?'real':'mock';};
 const jobOrigin=(value: string | undefined,fallback: string | null)=>{try{const url=new URL(value || '');return siteOrigin(value)&&url.pathname.startsWith('/job_detail/')?url.origin:fallback;}catch{return fallback;}};
 const stores=['companies','jobs','conversations','messages','events','meta'];
-const dbPromise=new Promise<IDBDatabase>((resolve,reject)=>{const req=indexedDB.open(DB_NAME,DB_VERSION);req.onupgradeneeded=()=>{for(const s of stores)if(!req.result.objectStoreNames.contains(s))req.result.createObjectStore(s,{keyPath:'id'});const messages=req.transaction!.objectStore('messages');if(!messages.indexNames.contains('conversationId'))messages.createIndex('conversationId','conversationId');};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
-function op(store: string, method: 'getAll', value?: IDBValidKey): Promise<ExternalRecord[]>;
+const dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
+  const request = indexedDB.open(DB_NAME, DB_VERSION);
+  request.onupgradeneeded = () => {
+    for (const name of stores) {
+      const store = request.result.objectStoreNames.contains(name)
+        ? request.transaction!.objectStore(name) : request.result.createObjectStore(name, {keyPath: 'id'});
+      if (name !== 'meta' && !store.indexNames.contains('account')) store.createIndex('account', 'account');
+      if ((name === 'messages' || name === 'jobs') && !store.indexNames.contains('conversationId')) store.createIndex('conversationId', 'conversationId');
+      if (name === 'jobs' && !store.indexNames.contains('conversationIds')) store.createIndex('conversationIds', 'conversationIds', {multiEntry: true});
+    }
+  };
+  request.onsuccess = () => resolve(request.result);
+  request.onerror = () => reject(request.error);
+});
+function readResult<T>(request: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+async function accountRows(store: string, account: string): Promise<ExternalRecord[]> {
+  if (!account) return [];
+  const db = await dbPromise;
+  return readResult(db.transaction(store).objectStore(store).index('account').getAll(account));
+}
 function op(store: string, method: 'get', value: IDBValidKey): Promise<ExternalRecord | undefined>;
 function op(store: string, method: 'put' | 'delete', value: any): Promise<unknown>;
-async function op(store: string, method: 'get' | 'getAll' | 'put' | 'delete', value?: any) {const db=await dbPromise;return new Promise((resolve,reject)=>{const writing=method==='put'||method==='delete';const tx=db.transaction(store,writing?'readwrite':'readonly');let result: unknown;const req=tx.objectStore(store)[method](value);req.onsuccess=()=>{result=req.result;};tx.oncomplete=()=>{if(writing&&affectsDashboard(store,value))notifyDashboard();resolve(result);};tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('数据库写入中断'));});}
-async function conversationMessages(id: string): Promise<ExternalRecord[]>{const db=await dbPromise;return new Promise((resolve,reject)=>{const tx=db.transaction('messages','readonly');const req=tx.objectStore('messages').index('conversationId').getAll(id);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
+async function op(store: string, method: 'get' | 'put' | 'delete', value: any) {const db=await dbPromise;return new Promise((resolve,reject)=>{const writing=method==='put'||method==='delete';const tx=db.transaction(store,writing?'readwrite':'readonly');let result: unknown;const req=tx.objectStore(store)[method](value);req.onsuccess=()=>{result=req.result;};tx.oncomplete=()=>{if(writing&&affectsDashboard(store,value))notifyDashboard();resolve(result);};tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('数据库写入中断'));});}
+async function conversationMessages(id: string): Promise<ExternalRecord[]>{const db=await dbPromise;return readResult(db.transaction('messages').objectStore('messages').index('conversationId').getAll(id));}
 async function commit(changes: Change[]){if(!changes.length)return;const db=await dbPromise;return new Promise<void>((resolve,reject)=>{const tx=db.transaction([...new Set(changes.map(([store])=>store))],'readwrite');try{for(const [store,method,value] of changes)tx.objectStore(store)[method](value);}catch(error: any){tx.abort();reject(error);return;}tx.oncomplete=()=>{if(changes.some(([store,,value])=>affectsDashboard(store,value)))notifyDashboard();resolve();};tx.onerror=()=>reject(tx.error||new Error('数据库写入失败'));tx.onabort=()=>reject(tx.error||new Error('数据库写入中断'));});}
 function affectsDashboard(store: string,value: ExternalRecord){
   return store!=='meta'||value?.id==='accounts'||value?.id==='activeAccount'||/:(sync|syncIntervalSeconds|accountName)$/.test(value?.id);
@@ -41,7 +64,7 @@ const validJobId=(account: string,id: unknown)=>typeof id==='string'&&id.length<
 async function deleteJobs(account: string,jobs: ExternalRecord[],companyId?: string): Promise<Change[]> {
   const ids=new Set(jobs.map(job=>job.id));
   const tokens=new Set(jobs.map(job=>job.id.slice(key(account,'job:').length)));
-  const [conversations,events]=await Promise.all([op('conversations','getAll'),op('events','getAll')]);
+  const [conversations,events]=await Promise.all([accountRows('conversations',account),accountRows('events',account)]);
   const changes: Change[]=jobs.map(job=>['jobs','put',{id:job.id,account,deleted:true,autoSchemaVersion:STATUS_SCHEMA,deletedAt:Date.now(),...(companyId?{companyId}:{})}]);
   for(const conversation of conversations){
     if(conversation.account!==account)continue;
@@ -85,9 +108,6 @@ async function saveJob(message: ExternalRecord,origin?: string | null){
     const jobSite=origin||(await accountSource(account)==='mock'?SITE_ORIGINS[1]:SITE_ORIGINS[0]);
     job={id:message.jobId,account,companyId:company.id,title:context.title.trim(),url:jobSite+'/job_detail/'+encodeURIComponent(message.jobId.slice(key(account,'job:').length))+'.html',autoContributions:{},autoSchemaVersion:STATUS_SCHEMA,autoStatus:'unknown',autoLabel:'未知',status:'unknown',manual:false,manualStatus:null,conversationIds:[],firstConversationAt:0};
     if(origin)observeJobClosure(job,context.jobClosed);
-  }else if(hasStatus&&message.status==='auto'){
-    await ensureStatusSchema(account);
-    job=await op('jobs','get',message.jobId);
   }
   const next: ExternalRecord={...job,updatedAt:Date.now()};
   if(origin&&message.context?.preview===true)next.tracked=true;
@@ -105,7 +125,7 @@ async function currentAccount(){return meta('activeAccount',null);}
 async function accountSource(account: string,expected?: string | null){
   let group=await meta(key(account,'sourceGroup'),null);
   if(!group){
-    const groups=new Set((await op('jobs','getAll')).filter(j=>j.account===account&&jobOrigin(j.url,null)).map(j=>sourceGroup(j.url)));
+    const groups=new Set((await accountRows('jobs',account)).filter(j=>jobOrigin(j.url,null)).map(j=>sourceGroup(j.url)));
     if(groups.size!==1)throw new Error('无法确定历史账号来源，请重新识别账号');
     group=[...groups][0];
     if(expected&&group!==expected)throw new Error('账号与页面来源不匹配');
@@ -117,7 +137,12 @@ async function accountSource(account: string,expected?: string | null){
 async function registerAccount(account: string,group: string,displayName?: unknown){
   const accounts=await meta('accounts',[]),active=await currentAccount();
   let known=accounts.includes(account)||active===account;
-  if(!known)for(const store of stores.filter(s=>s!=='meta'))if((await op(store,'getAll')).some(record=>record.account===account)){known=true;break;}
+  if(!known){
+    const db=await dbPromise;
+    for(const store of stores.filter(s=>s!=='meta')){
+      if(await readResult(db.transaction(store).objectStore(store).index('account').getKey(account))!==undefined){known=true;break;}
+    }
+  }
   if(known)await accountSource(account,group);
   else await setMeta(key(account,'sourceGroup'),group);
   if(active&&!accounts.includes(active)||!accounts.includes(account))await setMeta('accounts',[...new Set([...accounts,...(active?[active]:[]),account])]);if(!active)await setMeta('activeAccount',account);
@@ -146,7 +171,9 @@ async function importBackup(json: unknown){
   const changes: Change[]=[];
   let added=0,skipped=0;
   for(const [store,rows] of backup.tables){
-    const existing=new Set((await op(store,'getAll')).map(row=>row.id));
+    if(!rows.length)continue;
+    const db=await dbPromise;
+    const existing=new Set(await readResult(db.transaction(store).objectStore(store).index('account').getAllKeys(account)));
     for(const row of rows){
       if(existing.has(row.id)){skipped++;continue;}
       changes.push([store,'put',row]);added++;
@@ -295,7 +322,7 @@ async function ingestBatch(account: string,items: ExternalRecord[],selectedId?: 
   }
   async function migrateContributions(job: ExternalRecord | null | undefined){
     if(!job||job.autoContributions&&job.autoSchemaVersion===STATUS_SCHEMA)return job;
-    legacyConversations??=await op('conversations','getAll');
+    legacyConversations??=await accountRows('conversations',account);
     // Older records may only retain the last contact; include stored backlinks before attributing anything.
     const related=legacyConversations.filter(c=>c.account===account&&c.jobIds?.includes(job.id)).map(c=>c.id);
     const ids=[...new Set([...(job.conversationIds||[]),job.conversationId,...related].filter(Boolean))],autoContributions: Record<string, Contributions>={};
@@ -353,11 +380,13 @@ async function ingestBatch(account: string,items: ExternalRecord[],selectedId?: 
       if(storedPrevious?.status!==next.status)put('events',{id:key(account,crypto.randomUUID()),account,jobId:jid,status:next.status,source:'automatic',evidence:next.evidence,time:Date.now()});
     }
     // Historical records can retain associations on either side, even when this page has no JD.
-    const backlinks=(await op('jobs','getAll')).filter(j=>j.account===account&&(j.conversationId===cid||j.conversationIds?.includes(cid))).map(j=>j.id);
+    const db=await dbPromise, store=db.transaction('jobs').objectStore('jobs');
+    const [single,shared]=await Promise.all(['conversationId','conversationIds'].map(name=>readResult(store.index(name).getAllKeys(cid))));
+    const backlinks=[...single,...shared];
     for(const oldId of new Set([...(prev?.jobIds||[]),...backlinks])){
       if(oldId===jid||oldId===pendingId&&jid)continue;
       const old=await get('jobs',oldId);
-      if(old&&!old.deleted)put('jobs',{...old,firstConversationAt:earliest(old.firstConversationAt,firstMessageAt)});
+      if(old?.account===account&&!old.deleted)put('jobs',{...old,firstConversationAt:earliest(old.firstConversationAt,firstMessageAt)});
     }
     let storedHistory=prev?.history?{...prev.history}:undefined;
     if(history?.runId){
@@ -378,22 +407,25 @@ async function ingestBatch(account: string,items: ExternalRecord[],selectedId?: 
   await commit(changes);return summary;
 }
 // Backfill from local messages and both directions of the historical association.
-async function ensureConversationOrder(account: string){
+async function ensureConversationOrder(account: string,jobs: ExternalRecord[]){
   if(await meta(key(account,'conversationOrderVersion'),0)===1)return;
-  const jobs=(await op('jobs','getAll')).filter(j=>j.account===account);
-  const conversations=(await op('conversations','getAll')).filter(c=>c.account===account);
-  const messages=(await op('messages','getAll')).filter(m=>m.account===account);
+  const [conversations,messages]=await Promise.all([accountRows('conversations',account),accountRows('messages',account)]);
   const times=new Map();
   for(const m of messages)times.set(m.conversationId,earliest(times.get(m.conversationId),m.time));
-  const changes: Change[]=[],byId=new Map();
+  const changes: Change[]=[],byId=new Map(),contactsByJob=new Map<string,string[]>();
   for(const c of conversations){
     const time=earliest(c.firstMessageAt,times.get(c.id));byId.set(c.id,time);
+    for(const jobId of c.jobIds||[]){
+      const contacts=contactsByJob.get(jobId);
+      if(contacts)contacts.push(c.id);else contactsByJob.set(jobId,[c.id]);
+    }
     changes.push(['conversations','put',{...c,firstMessageAt:time}]);
   }
   for(const job of jobs){
     if(job.deleted)continue;
-    const ids=new Set([...(job.conversationIds||[]),job.conversationId,...conversations.filter(c=>c.jobIds?.includes(job.id)).map(c=>c.id)]);
-    changes.push(['jobs','put',{...job,firstConversationAt:earliest(job.firstConversationAt,...[...ids].map(id=>byId.get(id)))}]);
+    const ids=new Set([...(job.conversationIds||[]),job.conversationId,...(contactsByJob.get(job.id)??[])]);
+    job.firstConversationAt=earliest(job.firstConversationAt,...[...ids].map(id=>byId.get(id)));
+    changes.push(['jobs','put',job]);
   }
   if(changes.length)await commit(changes);
   await setMeta(key(account,'conversationOrderVersion'),1);
@@ -401,29 +433,38 @@ async function ensureConversationOrder(account: string){
 // Normalize interview stages independently of automatic status schema and current conversations.
 async function migrateInterviews(account: string){
   const normalize=(value: unknown)=>typeof value==='string'&&/^interview_[1-9]\d*$/.test(value)?'interviewing':value;
-  const jobs=(await op('jobs','getAll')).filter(j=>j.account===account),changes: Change[]=[];
+  const jobs=await accountRows('jobs',account),changes: Change[]=[];
   for(const job of jobs){
     if(job.deleted)continue;
     const manualStatus=normalize(job.manualStatus)||(job.manual&&normalize(job.status)==='interviewing'?'interviewing':job.manualStatus);
     const autoStatus=normalize(job.autoStatus),status=manualStatus||normalize(job.status);
-    if(manualStatus!==job.manualStatus||autoStatus!==job.autoStatus||status!==job.status)changes.push(['jobs','put',{...job,manualStatus,autoStatus,status,...(manualStatus?{manual:true}:{})}]);
+    if(manualStatus!==job.manualStatus||autoStatus!==job.autoStatus||status!==job.status){
+      Object.assign(job,{manualStatus,autoStatus,status,...(manualStatus?{manual:true}:{})});
+      changes.push(['jobs','put',job]);
+    }
   }
   if(changes.length)await commit(changes);
   const settings=await op('meta','get',key(account,'settings'));
   if(settings?.value&&Object.hasOwn(settings.value,'interviewRounds')){const {interviewRounds,...rest}=settings.value;await setMeta(settings.id,rest);}
+  return jobs;
 }
 // Recompute old automatic states from local messages before any view or manual reset.
 async function ensureStatusSchema(account: string){
-  if(!account)return;
-  await migrateInterviews(account);
-  const old=(await op('jobs','getAll')).filter(j=>j.account===account&&j.autoSchemaVersion!==STATUS_SCHEMA);
-  if(!old.length)return;
+  if(!account)return [];
+  const jobs=await migrateInterviews(account);
+  if(jobs.every(job=>job.autoSchemaVersion===STATUS_SCHEMA))return jobs;
   const prefix=key(account,'conversation:'),jobPrefix=key(account,'job:');
-  const conversations=(await op('conversations','getAll')).filter(c=>c.account===account&&c.id.startsWith(prefix));
+  const conversations=(await accountRows('conversations',account)).filter(c=>c.id.startsWith(prefix));
   const items=conversations.map(c=>{const only=c.jobIds?.length===1&&c.jobIds[0]?.startsWith(jobPrefix)?c.jobIds[0].slice(jobPrefix.length):'';return{row:{...c,id:c.id.slice(prefix.length),jobId:c.jobId||only}};}).filter(x=>x.row.id&&x.row.jobId);
   for(let i=0;i<items.length;i+=50)await ingestBatch(account,items.slice(i,i+50));
-  const remaining=(await op('jobs','getAll')).filter(j=>j.account===account&&j.autoSchemaVersion!==STATUS_SCHEMA);
-  if(remaining.length)await commit(remaining.map(j=>['jobs','put',{...j,autoContributions:{},autoSchemaVersion:STATUS_SCHEMA,autoStatus:'unknown',autoLabel:'未知',evidence:'旧记录缺少可关联的会话，无法按新规则确认',status:j.manualStatus||'unknown',manual:!!j.manualStatus}]));
+  const migrated=await accountRows('jobs',account),changes: Change[]=[];
+  for(const job of migrated){
+    if(job.autoSchemaVersion===STATUS_SCHEMA)continue;
+    Object.assign(job,{autoContributions:{},autoSchemaVersion:STATUS_SCHEMA,autoStatus:'unknown',autoLabel:'未知',evidence:'旧记录缺少可关联的会话，无法按新规则确认',status:job.manualStatus||'unknown',manual:!!job.manualStatus});
+    changes.push(['jobs','put',job]);
+  }
+  await commit(changes);
+  return migrated;
 }
 function visibleJobs(jobs: ExternalRecord[],conversations: ExternalRecord[]){
   const conversationIds=new Set(conversations.map(conversation=>conversation.id));
@@ -432,6 +473,16 @@ function visibleJobs(jobs: ExternalRecord[],conversations: ExternalRecord[]){
 }
 const messageIdOrder = new Intl.Collator('en', {numeric: true});
 const messageReceipt = (status: unknown) => status === 2 ? 'read' : status === 1 ? 'delivered' : undefined;
+async function* conversationHistories(conversations: ExternalRecord[]) {
+  const db = await dbPromise;
+  const batchSize = 32;
+  for (let offset = 0; offset < conversations.length; offset += batchSize) {
+    const batch = conversations.slice(offset, offset + batchSize);
+    const index = db.transaction('messages').objectStore('messages').index('conversationId');
+    const histories = await Promise.all(batch.map(contact => readResult(index.getAll(contact.id))));
+    for (const [indexInBatch, conversation] of batch.entries()) yield {conversation, messages: histories[indexInBatch]};
+  }
+}
 async function latestJobMessages(account: string, related: JobRecord[], allJobs: ExternalRecord[], conversations: ExternalRecord[], options: {includeListPreview?: boolean; activity?: Map<string, Set<number>>; withMessages?: Set<string>} = {}) {
   const {includeListPreview, activity, withMessages} = options;
   if (!related.length) return new Map<string, TimedHumanMessagePreview>();
@@ -442,10 +493,10 @@ async function latestJobMessages(account: string, related: JobRecord[], allJobs:
   }
 
   const latest = new Map<string, TimedHumanMessagePreview & {messageId: string}>();
-  for (const conversation of conversations) {
+  const relevantContacts = conversations.filter(contact => [...associations.get(contact.id)!].some(jobId => relevantJobs.has(jobId)));
+  for await (const {conversation, messages} of conversationHistories(relevantContacts)) {
     const conversationId = conversation.id;
     const jobIds = associations.get(conversationId)!;
-    if (![...jobIds].some(jobId => relevantJobs.has(jobId))) continue;
     const soleJob = jobIds.size === 1 ? jobIds.values().next().value : undefined;
     const listJob = key(account, 'job:' + conversation.jobId) === soleJob ? soleJob : undefined;
     const listTime = earliest(conversation.lastMessageAt);
@@ -458,7 +509,6 @@ async function latestJobMessages(account: string, related: JobRecord[], allJobs:
       activity.set(jobId, times);
     }
     const listText = typeof conversation.lastText === 'string' ? conversation.lastText.trim() : '';
-    const messages = await conversationMessages(conversationId);
     const competitionSummary = isCompetitionSummary(listText, messages);
     if (!competitionSummary && (listTime || listText)) {
       const currentJob = key(account, 'job:' + conversation.jobId);
@@ -500,7 +550,17 @@ async function latestJobMessages(account: string, related: JobRecord[], allJobs:
   }
   return new Map([...latest].map(([jobId, {messageId, ...preview}]) => [jobId, preview]));
 }
-async function data(account: string,includeHidden=false){const accounts=await meta('accounts',[]);const result: ExternalRecord={account,accounts,settings:{},sync:await syncTask(account)};for(const s of stores.filter(s=>s!=='meta'&&s!=='messages'))result[s]=(await op(s,'getAll')).filter(x=>x.account===account);result.jobs=result.jobs.filter((job: ExternalRecord)=>!job.deleted);if(!includeHidden)result.jobs=visibleJobs(result.jobs,result.conversations);const referenced=new Set([...result.jobs,...result.conversations].map((x: ExternalRecord)=>x.companyId).filter(Boolean));result.companies=result.companies.filter((x: ExternalRecord)=>!x.deleted&&(x.favorite===true||referenced.has(x.id)||typeof x.note==='string'&&x.note.length>0));return result;}
+async function data(account: string,includeHidden=false): Promise<ExternalRecord>{
+  const jobs=await ensureStatusSchema(account);
+  const [accounts,sync,companies,conversations,events]=await Promise.all([
+    meta('accounts',[]),syncTask(account),accountRows('companies',account),
+    accountRows('conversations',account),accountRows('events',account),
+  ]);
+  const shown=includeHidden?jobs.filter(job=>!job.deleted):visibleJobs(jobs,conversations);
+  const referenced=new Set([...shown,...conversations].map(row=>row.companyId).filter(Boolean));
+  const shownCompanies=companies.filter(company=>!company.deleted&&(company.favorite===true||referenced.has(company.id)||typeof company.note==='string'&&company.note.length>0));
+  return {account,accounts,settings:{},sync,companies:shownCompanies,jobs:shown,conversations,events};
+}
 function jobsWithStatusTimes(jobs: JobRecord[], events: ExternalRecord[]): JobRecord[] {
   const manualEvents = new Map<string, ExternalRecord>();
   for (const event of events) {
@@ -551,8 +611,8 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
         if(!task||!d.requestId||d.history.runId!==d.runId||!Number.isInteger(d.history.pages)||d.history.pages<1)throw new Error('缺少本次采集保存凭据');
       }
       await registerAccount(d.account,sourceGroup(sender.url)!,d.accountName);
-      await migrateInterviews(d.account);
-      await ensureConversationOrder(d.account);
+      const migratedJobs=await migrateInterviews(d.account);
+      await ensureConversationOrder(d.account,migratedJobs);
       tabAccounts.set(sender.tab!.id,d.account);
       await setMeta('tab-binding:'+sender.tab!.id,{account:d.account,group:sourceGroup(sender.url)});
       if(d.type==='FAVORITES'){await ingestFavorites(d.account,d.rows,siteOrigin(sender.url)!);return {ok:true,count:d.rows.length};}
@@ -570,8 +630,10 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
           if(titleChanged)Object.assign(next,{title,detailTitle:true});
           if(closureChanged||titleChanged){job={...next,updatedAt:Date.now()};await op('jobs','put',job);}
         }
-        const companies=(await op('companies','getAll')).filter(c=>c.account===d.account&&!c.deleted&&c.name===d.companyName);
-        const jobs=(await op('jobs','getAll')).filter(j=>j.account===d.account&&!j.deleted&&companies.some(c=>c.id===j.companyId));
+        const [accountCompanies,accountJobs]=await Promise.all([accountRows('companies',d.account),accountRows('jobs',d.account)]);
+        const companies=accountCompanies.filter(c=>!c.deleted&&c.name===d.companyName);
+        const companyIds=new Set(companies.map(company=>company.id));
+        const jobs=accountJobs.filter(j=>!j.deleted&&companyIds.has(j.companyId));
         return {ok:true,summary:job?{companyName:d.companyName,jobTitle:job.title,status:job.status,manual:job.manual}:{companyName:d.companyName||'公司待识别',jobTitle:d.title,status:'unknown',manual:false},companyJobCount:jobs.length};
       }
       if(d.type==='SNAPSHOT'){const summary=await ingestBatch(d.account,d.rows.map((row: ExternalRecord)=>({row})),d.selectedId,siteOrigin(sender.url)!);return {ok:true,summary,count:d.rows.length};}
@@ -594,10 +656,9 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
       for(const [field,max] of [['jobId',200],['companyName',180],['title',6000]] as const)if(message[field]!=null&&(typeof message[field]!=='string'||message[field].length>max))throw new Error('无效职位字段');
       await requireSiteAccount(message.account,sender);
       const account=message.account,candidate=message.jobId?key(account,'job:'+message.jobId):null,jobId=validJobId(account,candidate)?candidate:null;
-      await ensureStatusSchema(account);
-      await ensureConversationOrder(account);
-      const allJobs=(await op('jobs','getAll')).filter(j=>j.account===account);
-      const conversations=(await op('conversations','getAll')).filter(c=>c.account===account);
+      const allJobs=await ensureStatusSchema(account);
+      await ensureConversationOrder(account,allJobs);
+      const conversations=await accountRows('conversations',account);
       const visible=visibleJobs(allJobs,conversations),found=allJobs.find(j=>j.id===jobId),job=visible.find(j=>j.id===jobId);
       const companyId=found?.companyId||(message.companyName?.normalize('NFKC').trim()?companyKey(account,message.companyName):null);
       const company=companyId?await op('companies','get',companyId):null;
@@ -611,7 +672,7 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
       const latestMessages=await latestJobMessages(account,related,allJobs,conversations,{withMessages});
       let current=job?.id||(previewJob&&found?.id)||null;
       if(!jobId&&message.title){const matches=related.filter(j=>j.title===message.title);if(matches.length===1)current=matches[0].id;}
-      const events=related.length?(await op('events','getAll')).filter(e=>e.account===account):[];
+      const events=related.length?await accountRows('events',account):[];
       const relatedWithStatusTimes=jobsWithStatusTimes(related,events);
       const jobs: ExternalRecord[]=relatedWithStatusTimes.map(j=>({id:j.id,title:j.title,url:j.url||'',updatedAt:j.updatedAt,favorite:j.favorite===true,...(j.jobClosed===true?{jobClosed:true}:{}),status:j.status||'unknown',label:j.autoLabel||'',manual:!!j.manual,...(typeof j.statusAt==='number'&&j.statusAt>0?{statusAt:j.statusAt}:{}),current:j.id===current,note:j.note??'',persisted:true,firstConversationAt:earliest(j.firstConversationAt),...(Array.isArray(j.noteConflicts)&&j.noteConflicts.length?{noteConflicts:j.noteConflicts.filter((n: ExternalRecord)=>typeof n?.text==='string').map((n: ExternalRecord)=>({text:n.text}))}:{})}));
       for (const job of jobs) {
@@ -629,7 +690,6 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
     if(message.type==='DB_GET'&&(fromUI||fromSite))return serialize(async()=>{
       const account=fromSite?(message.account===undefined?tabAccounts.get(sender.tab!.id):message.account):(message.account===undefined?await currentAccount():await resolveAccount(message.account));
       if(fromSite)await requireSiteAccount(account,sender);
-      await ensureStatusSchema(account);
       const snapshot=await data(account);
       if(fromUI)snapshot.accountNames=Object.fromEntries(await Promise.all(snapshot.accounts.map(async (id: string)=>[id,await meta(key(id,'accountName'),'')])));
       if(fromUI&&account){
@@ -673,7 +733,7 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
       const company=await op('companies','get',companyId);
       if(!company||company.account!==account||company.deleted)throw new Error('找不到当前账号的公司');
       if(Object.hasOwn(message,'expectedNote')&&(company.note??'')!==message.expectedNote)throw new Error('公司备注已更改，请关闭浮层后重新确认');
-      const jobs=(await op('jobs','getAll')).filter(job=>job.account===account&&job.companyId===companyId&&!job.deleted);
+      const jobs=(await accountRows('jobs',account)).filter(job=>job.companyId===companyId&&!job.deleted);
       const changes=await deleteJobs(account,jobs,companyId);
       changes.push(['companies','put',{id:companyId,account,deleted:true,deletedAt:Date.now()}]);
       await commit(changes);
@@ -698,7 +758,7 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
       return {ok:true};
     });
     if(message.type==='SELECT_ACCOUNT')return serialize(async()=>{if(message.account===undefined)throw new Error('请选择账号');const a=await resolveAccount(message.account);await setMeta('activeAccount',a);return {ok:true};});
-    if(message.type==='EXPORT')return serialize(async()=>{const a=await resolveAccount(message.account);await ensureStatusSchema(a);const d=await data(a,true);d.messages=(await op('messages','getAll')).filter(x=>x.account===a);const group=await accountSource(a).catch(()=>null);if(group)d.sourceGroup=group;const result=message.jobIds===undefined?d:filterExportData(a,d,message.jobIds);return {ok:true,data:result};});
+    if(message.type==='EXPORT')return serialize(async()=>{const a=await resolveAccount(message.account);const d=await data(a,true);d.messages=await accountRows('messages',a);const group=await accountSource(a).catch(()=>null);if(group)d.sourceGroup=group;const result=message.jobIds===undefined?d:filterExportData(a,d,message.jobIds);return {ok:true,data:result};});
     if(message.type==='IMPORT')return serialize(()=>importBackup(message.json));
     if(message.type==='SET_STATUS')return serialize(async()=>{const a=await resolveAccount(message.account);if(message.status!=='auto'&&!validStatus(message.status))throw new Error('无效状态');await ensureStatusSchema(a);const j=await op('jobs','get',message.jobId);if(!j||j.account!==a||j.deleted)throw new Error('找不到当前账号的 JD');j.manualStatus=message.status==='auto'?null:message.status;j.manual=!!j.manualStatus;j.status=j.manualStatus||j.autoStatus||'unknown';j.updatedAt=Date.now();await op('jobs','put',j);await addEvent(a,j.id,j.status,'manual',message.status==='auto'?'恢复自动状态':'用户修订');return {ok:true};});
     if(['SYNC','STOP_SYNC'].includes(message.type)){

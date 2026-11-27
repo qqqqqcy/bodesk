@@ -18,7 +18,7 @@ async function collect(context, {scenario = 'normal', stopAfterPage = false, swi
   const output = [];
   const user = {$options: {name: 'App'}, $store: {state: {userInfo: {...config.user}}}};
   const list = {$options: {name: 'boss-list'}, fullList: rows, isLoading: false, bottomText: listing.ended ? '没有更多了' : '加载更多'};
-  const document = {documentElement: null, addEventListener() {}, querySelector: () => null, querySelectorAll: selector => selector === '*' ? [{__vue__: user}, {__vue__: list}] : []};
+  const document = {documentElement: null, addEventListener() {}, querySelector: () => null, querySelectorAll: () => [], getElementsByTagName: tag => tag === '*' ? [{__vue__: user}, {__vue__: list}] : []};
   let listener;
   const began = performance.now();
   const window = {

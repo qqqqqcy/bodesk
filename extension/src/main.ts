@@ -40,10 +40,19 @@ type Progress = (running: boolean, message: string) => Promise<void>;
     });
   }
   const text=(v: unknown,n=1200)=>typeof v==='string'?v.slice(0,n):'';
-  const allVue=()=>[...document.querySelectorAll('*')].map(e=>e.__vue__).filter((value): value is ExternalRecord => Boolean(value));
+  function* pageComponents() {
+    for (const element of document.getElementsByTagName('*')) {
+      const component = element.__vue__;
+      if (component) yield component;
+    }
+  }
   const post=(data: ExternalRecord)=>window.postMessage({channel:CHANNEL,direction:'to-extension',data},location.origin);
   async function account() {
-    const user=allVue().find(v=>v.$store?.state?.userInfo?.userId)?.$store.state.userInfo;
+    let user: ExternalRecord | undefined;
+    for (const component of pageComponents()) {
+      const info = component.$store?.state?.userInfo;
+      if (info?.userId) {user = info; break;}
+    }
     const uid=user?.userId || window._PAGE?.uid;
     if (!uid) return null;
     const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode((isMock?'boss:mock:':'boss:')+String(uid)));
@@ -51,9 +60,13 @@ type Progress = (running: boolean, message: string) => Promise<void>;
     return {id:[...new Uint8Array(bytes)].map(b=>b.toString(16).padStart(2,'0')).join('').slice(0,24),uid:String(uid),name};
   }
   function rows() {
-    const vue=allVue();
-    const list=vue.find(v=>v.$options.name==='boss-list' && Array.isArray(v.fullList));
-    const source: ExternalRecord[]=list?.fullList || vue.find(v=>v.$options.name==='virtual-list'&&Array.isArray(v.$props?.dataSources))?.$props.dataSources || [];
+    let list: ExternalRecord | undefined, virtualRows: ExternalRecord[] | undefined;
+    for (const component of pageComponents()) {
+      const name = component.$options?.name;
+      if (name === 'boss-list' && Array.isArray(component.fullList)) {list = component; break;}
+      if (name === 'virtual-list' && Array.isArray(component.$props?.dataSources)) virtualRows ??= component.$props.dataSources;
+    }
+    const source: ExternalRecord[]=list?.fullList ?? virtualRows ?? [];
     const loading=!!list?.isLoading;
     const listEnded=list?.bottomText==='没有更多了';
     return {rows:source.filter(x=>x.encryptBossId),listEnded,loading,loadedEmpty:!!list&&!loading&&listEnded&&source.length===0};

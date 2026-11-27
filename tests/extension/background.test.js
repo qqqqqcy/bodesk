@@ -29,6 +29,34 @@ async function harness({db=new IDBFactory(),onSend}={}) {
 const row=(id,jobId,extra={})=>({id,jobId,name:'模拟联系人',companyName:'模拟公司',jobTitle:`职位 ${jobId}`,...extra});
 const snapshot=(account,rows)=>({type:'SNAPSHOT',account,rows});
 
+test('升级已有 v2 数据库后，两种历史职位关联都能接收会话时间，并按账号隔离',async()=>{
+  const factory=new IDBFactory();
+  await new Promise((resolve,reject)=>{
+    const request=factory.open('boss-local-helper',2);
+    request.onupgradeneeded=()=>{
+      const db=request.result;
+      for(const name of ['companies','jobs','conversations','messages','events','meta'])db.createObjectStore(name,{keyPath:'id'});
+      const tx=request.transaction;
+      tx.objectStore('messages').createIndex('conversationId','conversationId');
+      tx.objectStore('meta').put({id:'accounts',value:[A,B]});
+      for(const account of [A,B]){
+        tx.objectStore('meta').put({id:account+':sourceGroup',value:'mock'});
+        const contact=account+':conversation:shared';
+        for(const [suffix,link] of [['old',{conversationId:contact}],['new',{conversationIds:[contact]}]]){
+          tx.objectStore('jobs').put({id:account+':job:'+suffix,account,title:suffix,note:'历史备注',autoSchemaVersion:7,...link});
+        }
+      }
+    };
+    request.onsuccess=()=>{request.result.close();resolve();};request.onerror=()=>reject(request.error);
+  });
+  const h=await harness({db:factory});
+  const site={url:'http://127.0.0.1:4173/web/geek/chat',tab:{id:2}};
+  const result=await h.ingest({type:'CONVERSATION',account:A,row:{id:'shared'},messages:[{id:'first',time:12345,text:'你好'}]},site);
+  assert.equal(result.ok,true,result.error);
+  assert.deepEqual((await h.get(A)).jobs.map(job=>[job.title,job.firstConversationAt,job.note]),[['new',12345,'历史备注'],['old',12345,'历史备注']]);
+  assert.deepEqual((await h.get(B)).jobs.map(job=>[job.account,job.firstConversationAt]),[[B,undefined],[B,undefined]]);
+});
+
 test('账号登录名按原账号存储，后续无名称的页面不会清除名称',async()=>{
   const h=await harness();
   await h.ingest({...snapshot(A,[]),accountName:' 登录名甲 '});
@@ -343,7 +371,7 @@ test('收藏字段整批验证，来源和账号保持隔离',async()=>{
 });
 // Mutate only this harness's in-memory database to simulate pre-contribution records.
 async function updateStored(h,storeName,transform){
-  const db=await new Promise((resolve,reject)=>{const req=h.db.open('boss-local-helper',2);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
+  const db=await new Promise((resolve,reject)=>{const req=h.db.open('boss-local-helper');req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
   try{
     await new Promise((resolve,reject)=>{
       const tx=db.transaction(storeName,'readwrite'),store=tx.objectStore(storeName),req=store.getAll();
@@ -360,7 +388,7 @@ test('各 API 迁移离线面试存量并清理旧设置，保留备注和并发
     await updateStored(h,'jobs',j=>({...j,manualStatus:'interview_2',status:'interview_2',autoStatus:'interview_12',manual:true,note:'旧备注',noteConflicts:[{sourceId:'old',text:'冲突'}]}));
     await updateStored(h,'conversations',c=>c.id.endsWith('c2')?null:c);
     await updateStored(h,'meta',m=>m.id===`${A}:sourceGroup`?{...m,extra:'keep'}:m);
-    const db=await new Promise((resolve,reject)=>{const req=h.db.open('boss-local-helper',2);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
+    const db=await new Promise((resolve,reject)=>{const req=h.db.open('boss-local-helper');req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
     await new Promise((resolve,reject)=>{const tx=db.transaction('meta','readwrite');tx.objectStore('meta').put({id:`${A}:settings`,value:{interviewRounds:7,other:'保留'}});tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});db.close();
     const messages={DB_GET:{type:'DB_GET',account:A},WIDGET_GET:{type:'WIDGET_GET',account:A,jobId:'j1'},EXPORT:{type:'EXPORT',account:A},SAVE_JOB:{type:'SAVE_JOB',account:A,jobId,note:'新备注',expectedManualStatus:'interviewing'},SET_STATUS:{type:'SET_STATUS',account:A,jobId,status:'passed'}};
     const result=await h.send(messages[trigger],trigger==='WIDGET_GET'?site:undefined);
@@ -1307,7 +1335,7 @@ test('worker 重启后恢复运行绑定，标签关闭识别为中断',async()=
 test('重启后过期任务被标记为中断并拒绝旧进度',async()=>{
   const first=await harness();await first.ingest(snapshot(A,[]));first.tabs.push({id:1,active:true});
   const start=await first.send({type:'SYNC',account:A});
-  const db=await new Promise((resolve,reject)=>{const req=first.db.open('boss-local-helper',2);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
+  const db=await new Promise((resolve,reject)=>{const req=first.db.open('boss-local-helper');req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
   await new Promise((resolve,reject)=>{const tx=db.transaction('meta','readwrite');const store=tx.objectStore('meta');const req=store.get(`${A}:sync`);req.onsuccess=()=>store.put({...req.result,value:{...req.result.value,updatedAt:Date.now()-100000}});tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});
   db.close();const restarted=await harness({db:first.db});
   const state=(await restarted.get(A)).sync;assert.equal(state.running,false);assert.equal(state.interrupted,true);

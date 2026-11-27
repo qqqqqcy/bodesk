@@ -5,7 +5,7 @@ import {ClipboardText, Copy, Download, FileText, Gear, Loader, Upload} from 'rei
 import {ActionMenu} from './action-menu.tsx';
 import {PasteImportDialog} from './backup-dialogs.tsx';
 import {formatBoardMarkdown} from './board-export.ts';
-import {ActivityRange, boardActivityWindow, buildBoardJobs, filterBoardJobs, JobBoard, useBoardPreferences} from './job-board.tsx';
+import {ActivityRange, boardActivityWindow, buildBoardJobs, filterBoardJobs, JobBoard, useBoardPreferences, useFilteredBoardJobs} from './job-board.tsx';
 import {DashboardSelect} from './dashboard-select.tsx';
 import {Icon} from './icon.tsx';
 import {backupText} from './backup.ts';
@@ -210,13 +210,14 @@ function Dashboard() {
     }
   }
   async function exportData(mode: 'file' | 'clipboard') {
-    if (!filteredJobIds.length) {
+    if (!filteredBoardJobs.length) {
       notify('当前筛选下暂无可导出的 JD', true);
       return;
     }
     await action(async () => {
       if (state.current.mounted) setPendingAction('export');
       try {
+        const filteredJobIds = filteredBoardJobs.map(job => job.id);
         const response = await request({type: 'EXPORT', jobIds: filteredJobIds});
         if (!response.data || typeof response.data !== 'object') throw new Error('导出失败：未收到有效数据');
         const json = JSON.stringify(response.data, null, 2);
@@ -302,10 +303,9 @@ function Dashboard() {
   const now = Date.now();
   const activityWindow = boardActivityWindow(board.preferences, now);
   const allBoardJobs = useMemo(() => buildBoardJobs(db), [db]);
-  const filteredBoardJobs = filterBoardJobs(allBoardJobs, board.preferences.filters, activityWindow);
+  const filteredBoardJobs = useFilteredBoardJobs(allBoardJobs, board.preferences.filters, activityWindow);
   const totalJobCount = allBoardJobs.length;
-  const filteredJobIds = filteredBoardJobs.map(job => job.id);
-  const filteredJobCount = filteredJobIds.length;
+  const filteredJobCount = filteredBoardJobs.length;
   const exportHint = filteredJobCount === 0
     ? '仅导出当前筛选结果（暂无可导出的 JD）'
     : filteredJobCount === totalJobCount
@@ -422,7 +422,7 @@ function Dashboard() {
           </div>
         </div>
       </section>
-      <JobBoard key={db?.account} snapshot={db} busy={busy} onSave={saveBoardEdit} activityWindow={activityWindow} now={now} board={board} />
+      <JobBoard key={db?.account} snapshot={db} busy={busy} onSave={saveBoardEdit} shownJobs={filteredBoardJobs} total={totalJobCount} now={now} board={board} />
       {pasteImportOpen && <PasteImportDialog onImport={importPastedJson} onClose={() => setPasteImportOpen(false)} />}
     </main>
   </div>;

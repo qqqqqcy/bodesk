@@ -13,6 +13,7 @@ function harness(origin='https://www.zhipin.com'){
   const detail=root(),card=root(),document=root();
   const user={__vue__:{$store:{state:{userInfo:{userId:7}}}}};
   document.nodes=elements;
+  document.getElementsByTagName=tag=>elements.get(tag)||[];
   elements.set('*',[user]);elements.set('.job-detail-box',[detail]);elements.set('.job-card-box.active',[card]);
   const documentEvents={};document.addEventListener=(name,handler)=>{documentEvents[name]=handler;};
   document.querySelector=selector=>document.querySelectorAll(selector)[0]||null;
