@@ -9,6 +9,10 @@
     <img src="https://img.shields.io/badge/browser-Chrome%20%2F%20Edge-4a5568?style=flat-square" alt="Chrome and Edge" />
   </p>
   <p>
+    <a href="https://chromewebstore.google.com/detail/bodesk/imajikbpaeklfeikhlembnpndmncfidm">Chrome 应用商店安装</a> ·
+    <a href="https://github.com/qqqqqcy/bodesk/releases/latest">GitHub Releases</a>
+  </p>
+  <p>
     <a href="#为什么用-bodesk">为什么用</a> ·
     <a href="#界面与交互演示">界面演示</a> ·
     <a href="#核心特性">核心特性</a> ·
@@ -92,8 +96,9 @@
 
 ## 3 步安装使用
 
-> [!IMPORTANT]
-> 从 [GitHub Releases](https://github.com/qqqqqcy/bodesk/releases/latest) 下载 ZIP 并解压。`main` 更新后，GitHub Actions 会在测试通过时发布安装包，标签包含扩展版本和提交号。
+Chrome 用户可以从 [Chrome 应用商店](https://chromewebstore.google.com/detail/bodesk/imajikbpaeklfeikhlembnpndmncfidm) 点击「添加至 Chrome」。安装完成后，直接查看第 3 步。
+
+手动安装或使用 Edge 时，从 [GitHub Releases](https://github.com/qqqqqcy/bodesk/releases/latest) 下载 ZIP，并按下面的步骤加载。GitHub Actions 会在 `main` 更新且测试通过后发布带有版本和提交号的安装包。
 
 ### 1. 下载并解压扩展
 
